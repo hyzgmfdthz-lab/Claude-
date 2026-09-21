@@ -466,8 +466,8 @@ export function hydroWindowOpen(config, date) {
  * Formel wie dort, an einer Stelle gehalten.
  *
  * @param {any} config @param {string} date
- * @returns {{kind:string, hc:any, prod:number, hoursPerEmployee:number, headsForPool:number,
- *   poolGross:number, mentoring:number, reserve:number, poolHours:number}}
+ * @returns {{kind:"REGULAR"|"SATURDAY"|"OFF", hc:any, prod:number, hoursPerEmployee:number,
+ *   headsForPool:number, poolGross:number, mentoring:number, reserve:number, poolHours:number}}
  */
 export function poolHoursFor(config, date) {
   const kind = dayKind(config, date);
