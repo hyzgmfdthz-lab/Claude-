@@ -3,7 +3,7 @@
  */
 
 import { OPERATIONS, OPERATION_BY_ID, PROJECT_STATUS, round1, round2 } from './model.js';
-import { LIMITER, LIMITER_LABEL, dayCapacity } from './capacity.js';
+import { LIMITER, LIMITER_LABEL, poolHoursFor } from './capacity.js';
 import { cmpDate, weekKey, addDays } from './calendar.js';
 
 /**
@@ -453,7 +453,7 @@ export function dashboardKpis(result, weeks, range = {}) {
     if (!windowEnd || cmpDate(von, windowEnd) > 0) return 0;
     let sum = 0;
     for (let d = von; cmpDate(d, windowEnd) <= 0; d = addDays(d, 1)) {
-      sum += Number(dayCapacity(cfg, d).poolHours) || 0;
+      sum += Number(poolHoursFor(cfg, d).poolHours) || 0;
     }
     return sum;
   })());

@@ -456,6 +456,56 @@ export function hydroWindowOpen(config, date) {
 }
 
 /**
+ * Nur die Mannschafts-Poolstunden eines Tages - ohne die Aufschluesselung je
+ * Arbeitsgang/Maschine/Platz, die `dayCapacity()` zusaetzlich bildet.
+ *
+ * Fuer Auswertungen, die NUR die Poolstunden vieler Tage brauchen (z. B.
+ * `availableHours` in kpi.js ueber einen ganzen Kennzahlenzeitraum), ist
+ * `dayCapacity()` unnoetig teuer - es baut je Tag zusaetzlich die
+ * vollstaendige byOp-Aufschluesselung fuer alle Arbeitsgaenge. Dieselbe
+ * Formel wie dort, an einer Stelle gehalten.
+ *
+ * @param {any} config @param {string} date
+ * @returns {{kind:string, hc:any, prod:number, hoursPerEmployee:number, headsForPool:number,
+ *   poolGross:number, mentoring:number, reserve:number, poolHours:number}}
+ */
+export function poolHoursFor(config, date) {
+  const kind = dayKind(config, date);
+  const hc = headcountFor(config, date);
+  const prod = productivityFor(config, date);
+  if (kind === DAY_KIND.OFF) {
+    return {
+      kind, hc, prod, hoursPerEmployee: 0, headsForPool: 0, poolGross: 0, mentoring: 0, reserve: 0, poolHours: 0,
+    };
+  }
+  const regularPerDay = (Number(config.workTime?.regularHoursPerWeek ?? 37.5)) / Math.max(1, (config.workTime?.workDays ?? [1, 2, 3, 4, 5]).length);
+  const overtimePerDay = overtimeFor(config, date) / Math.max(1, (config.workTime?.workDays ?? [1, 2, 3, 4, 5]).length);
+  let hoursPerEmployee;
+  let headsForPool;
+  if (kind === DAY_KIND.SATURDAY) {
+    hoursPerEmployee = Number(config.workTime?.saturdayHours ?? 6);
+    const w = config.saturday?.weeks?.[weekKey(date)];
+    if (w && w.headcountOverride != null && w.headcountOverride !== '') {
+      headsForPool = Number(w.headcountOverride);
+    } else {
+      headsForPool = hc.effective * saturdayQuota(config, date);
+    }
+  } else {
+    hoursPerEmployee = regularPerDay + overtimePerDay;
+    headsForPool = hc.effective;
+  }
+  const mentoring = kind === DAY_KIND.SATURDAY ? 0 : mentoringHoursPerDay(config, date);
+  // Zubehoer und Kleinarbeiten gehen vorab ab - sie verbrauchen Stunden,
+  // ohne als Auftrag in der Planung zu stehen.
+  const reserve = kind === DAY_KIND.SATURDAY ? 0 : reserveHoursPerDay(config);
+  const poolGross = Math.max(0, headsForPool * hoursPerEmployee * prod);
+  const poolHours = round2(Math.max(0, poolGross - mentoring - reserve));
+  return {
+    kind, hc, prod, hoursPerEmployee, headsForPool, poolGross, mentoring, reserve, poolHours,
+  };
+}
+
+/**
  * Vollstaendige Tageskapazitaet.
  *
  * @param {any} config
@@ -469,9 +519,9 @@ export function hydroWindowOpen(config, date) {
  * }}
  */
 export function dayCapacity(config, date) {
-  const kind = dayKind(config, date);
-  const hc = headcountFor(config, date);
-  const prod = productivityFor(config, date);
+  const {
+    kind, hc, prod, hoursPerEmployee, headsForPool, poolGross, mentoring, reserve, poolHours,
+  } = poolHoursFor(config, date);
   const res = config.resources ?? {};
   const machinesPerWelder = Math.max(1, Number(res.machinesPerWelder ?? 2));
 
@@ -489,32 +539,7 @@ export function dayCapacity(config, date) {
     return empty;
   }
 
-  const regularPerDay = (Number(config.workTime?.regularHoursPerWeek ?? 37.5)) / Math.max(1, (config.workTime?.workDays ?? [1, 2, 3, 4, 5]).length);
-  const overtimePerDay = overtimeFor(config, date) / Math.max(1, (config.workTime?.workDays ?? [1, 2, 3, 4, 5]).length);
-
-  let hoursPerEmployee;
-  let headsForPool;
-  let saturdayHeadcount = null;
-  if (kind === DAY_KIND.SATURDAY) {
-    hoursPerEmployee = Number(config.workTime?.saturdayHours ?? 6);
-    const w = config.saturday?.weeks?.[weekKey(date)];
-    if (w && w.headcountOverride != null && w.headcountOverride !== '') {
-      headsForPool = Number(w.headcountOverride);
-    } else {
-      headsForPool = hc.effective * saturdayQuota(config, date);
-    }
-    saturdayHeadcount = round2(headsForPool);
-  } else {
-    hoursPerEmployee = regularPerDay + overtimePerDay;
-    headsForPool = hc.effective;
-  }
-
-  const mentoring = kind === DAY_KIND.SATURDAY ? 0 : mentoringHoursPerDay(config, date);
-  // Zubehoer und Kleinarbeiten gehen vorab ab - sie verbrauchen Stunden,
-  // ohne als Auftrag in der Planung zu stehen.
-  const reserve = kind === DAY_KIND.SATURDAY ? 0 : reserveHoursPerDay(config);
-  const poolGross = Math.max(0, headsForPool * hoursPerEmployee * prod);
-  const poolHours = round2(Math.max(0, poolGross - mentoring - reserve));
+  const saturdayHeadcount = kind === DAY_KIND.SATURDAY ? round2(headsForPool) : null;
 
   // Allgemeines Fenster (fuer die Anzeige); je Arbeitsgang kann es abweichen.
   const opHours = operatingHours(config, date, hoursPerEmployee);
