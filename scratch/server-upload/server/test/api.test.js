@@ -424,6 +424,13 @@ test('HTTP: Oberfläche und Schnittstellen antworten', async () => {
   assert.ok(xlsx.headers.get('content-disposition').includes('.xlsx'));
   assert.ok((await xlsx.arrayBuffer()).byteLength > 3000);
 
+  // Vollstaendige Datensicherung als JSON (Nutzerauftrag 21.09.2026) - ueber HTTP, wie im Browser geklickt
+  const json = await fetch(`${base}/api/export?scenario=BASELINE&format=json&token=${encodeURIComponent(angemeldet.token)}`);
+  assert.equal(json.status, 200);
+  assert.ok(json.headers.get('content-disposition').includes('.json'));
+  const gesichert = await json.json();
+  assert.ok(Array.isArray(gesichert.projects) && gesichert.projects.length > 0);
+
   const missing = await fetch(`${base}/api/gibtesnicht`, { headers: auth });
   assert.equal(missing.status, 404);
 

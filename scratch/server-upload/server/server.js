@@ -335,6 +335,15 @@ async function handleApi(api, req, res, pathname, query, runtime = null) {
       return sendDownload(res, Buffer.from(api.exportCsv(scenario, type), 'utf8'),
         `Armaturenbau_${type}_${stamp}.csv`, 'text/csv; charset=utf-8');
     }
+    /*
+     * Vollstaendiger Datenbestand als JSON (nur Verwaltung, siehe
+     * api.exportDataset) - dasselbe, was die Einzeldatei-Fassung als
+     * "Datensicherung speichern" anbietet, hier bisher fehlend.
+     */
+    if (format === 'json') {
+      return sendDownload(res, Buffer.from(api.exportDataset(), 'utf8'),
+        `Armaturenbau_Datensicherung_${stamp}.json`, 'application/json; charset=utf-8');
+    }
     return sendDownload(res, api.exportWorkbook(scenario), `Armaturenbau_Planung_${stamp}.xlsx`,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   }

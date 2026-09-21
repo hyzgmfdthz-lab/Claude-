@@ -1793,6 +1793,23 @@ export function createApi(store, options = {}) {
     },
 
     /**
+     * Vollstaendiger Datenbestand als JSON - fuer Fehlersuche und als
+     * Sicherung außerhalb der Anwendung.
+     *
+     * Nutzerauftrag (21.09.2026): "Kannst du der Netzwerkversion denselben
+     * Datensicherung-Knopf geben wie die Einzeldatei-Fassung?" Die
+     * Einzeldatei-Fassung konnte das schon immer (browser/app.js,
+     * exportDataset) - nur lokal im Browser, ohne Serveranfrage. Die
+     * Netzwerkversion hatte dafuer gar keine Schnittstelle. Nur die
+     * Verwaltung darf das: der Export enthaelt auch Kuerzel und - falls
+     * gesetzt - Passwort-Hashes der Mannschaft.
+     */
+    exportDataset() {
+      if (!actor.admin) throw new ApiError('Nur die Verwaltung darf den vollständigen Datenbestand exportieren.', 403);
+      return JSON.stringify(dataset, null, 1);
+    },
+
+    /**
      * Projektimport aus Excel/CSV.
      * @param {{format:string, data:string, mode?:string}} payload
      */

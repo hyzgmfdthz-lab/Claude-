@@ -293,6 +293,26 @@ test('Das letzte Kürzel der Verwaltung bleibt bestehen', () => {
   assert.throws(() => api.deleteUser('DOHE'), /letzte Kürzel/);
 });
 
+test('Vollständige Datensicherung als JSON: nur die Verwaltung darf', () => {
+  /*
+   * Nutzerauftrag (21.09.2026): die Netzwerkversion soll denselben
+   * "Datensicherung speichern"-Knopf haben wie die Einzeldatei-Fassung.
+   * Der Export enthält Kürzel und Passwort-Hashes - deshalb nur Verwaltung.
+   */
+  const api = freshApi();
+  const kollege = api.login({ user: 'KEMI', newPassword: 'Kollege2026' });
+  api.setActor(api.sessionUser(kollege.token).user);
+  assert.throws(() => api.exportDataset(), /Verwaltung/);
+
+  const chef = api.login({ user: 'DOHE', newPassword: 'Leitung2026' });
+  api.setActor(api.sessionUser(chef.token).user);
+  const json = api.exportDataset();
+  const geladen = JSON.parse(json);
+  assert.ok(Array.isArray(geladen.projects) && geladen.projects.length > 0);
+  assert.ok(Array.isArray(geladen.scenarios) && geladen.scenarios.length > 0);
+  assert.ok(Array.isArray(geladen.users) && geladen.users.some((u) => u.id === 'DOHE'));
+});
+
 /* ================================================================== *
  * Staende
  * ================================================================== */

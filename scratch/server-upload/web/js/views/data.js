@@ -121,6 +121,16 @@ export function render(a) {
             toast('Sicherung erstellt.', 'ok');
           },
         }, 'Sicherung erstellen'),
+        /*
+         * Nutzerauftrag (21.09.2026): "Datensicherung speichern" wie in der
+         * Einzeldatei-Fassung, auch fuer die Netzwerkversion. Dort laeuft
+         * die Sicherung ueber /api/export?format=json (nur Verwaltung -
+         * enthaelt Kuerzel und Passwort-Hashes der Mannschaft).
+         */
+        a.state.runtime?.mode !== 'standalone' && a.isAdmin && h('button.btn', {
+          title: 'Vollständigen Datenbestand als JSON-Datei herunterladen - nur Verwaltung',
+          onclick: () => download(`/api/export?scenario=${a.scenarioId}&format=json`),
+        }, 'Datensicherung als Datei speichern'),
         h('button.btn.btn--danger', {
           onclick: async () => {
             const ok = await confirmDialog('Alles zurücksetzen?',
