@@ -321,6 +321,21 @@ function tileRow(a, k, an) {
       small: frei.small,
       hint: frei.hint,
     }),
+    /*
+     * FIX (gefunden 21.09.2026): "Aufträge gleichzeitig" und "Mitarbeiter
+     * je Auftrag" werden bei Leerlauf automatisch gelockert (Nutzer-
+     * entscheidung 21.09.2026). Diese Kachel ist der dafuer ausdruecklich
+     * geforderte "sichtbare Hinweis" - ohne sie sah man keine Wirkung
+     * beim Verstellen dieser Regler und keinen Grund dafuer.
+     */
+    (k.wipAusnahmen?.stunden ?? 0) > 0
+      ? tile('WIP-Grenze gelockert', `${fmt.num(k.wipAusnahmen.stunden)} h`, {
+        tone: 'info',
+        small: true,
+        hint: `an ${k.wipAusnahmen.tage} Tagen, weil sonst Mannschaftszeit leer gestanden hätte: `
+          + Object.entries(k.wipAusnahmen.jeGrund).map(([g, h2]) => `${g} ${fmt.num(h2)} h`).join(', '),
+      })
+      : null,
     // Gezaehlt werden nur OFFENE Befunde - bestaetigte sind bewusst leise.
     tile('Auffälligkeiten', pl ? (pl.open ?? pl.items.length) : '–', {
       tone: pl?.worst === 'KRITISCH' ? 'bad' : pl?.worst === 'WARNUNG' ? 'warn' : pl?.open ? 'info' : 'ok',

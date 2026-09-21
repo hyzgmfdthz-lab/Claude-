@@ -491,6 +491,30 @@ export function dashboardKpis(result, weeks, range = {}) {
   const heft = processUtilization(result, 'HEFTEN', windowEnd, windowStart);
   const shortfall = deadlineShortfall(result);
 
+  /*
+   * FIX (gefunden 21.09.2026 beim Nachweis der Regler-Wirkung): die
+   * WIP-Ausnahme ("Grenze bei Leerlauf automatisch lockern", Nutzer-
+   * entscheidung 21.09.2026) wurde in scheduler.js zwar korrekt vermerkt
+   * (dayRecord.wipAusnahmen), aber NIRGENDS in einer Auswertung oder
+   * Ansicht gelesen - der ausdruecklich geforderte "sichtbare Hinweis,
+   * dass das eine Ausnahme war" fehlte komplett. Wer "Aufträge
+   * gleichzeitig" oder "Mitarbeiter je Auftrag" enger stellte, sah keine
+   * Wirkung und keinen Hinweis, WARUM nicht - die Grenze wurde still
+   * uebersteuert. Jetzt als Kennzahl verfuegbar.
+   */
+  const wipAusnahmen = { stunden: 0, tage: 0, jeGrund: {} };
+  for (const d of result.daySeries ?? []) {
+    if (windowEnd && cmpDate(d.date, windowEnd) > 0) continue;
+    if (windowStart && cmpDate(d.date, windowStart) < 0) continue;
+    if (!d.wipAusnahmen?.length) continue;
+    wipAusnahmen.tage += 1;
+    for (const a of d.wipAusnahmen) {
+      wipAusnahmen.stunden = round2(wipAusnahmen.stunden + a.manHours);
+      const label = LIMITER_LABEL[a.grund] ?? a.grund;
+      wipAusnahmen.jeGrund[label] = round2((wipAusnahmen.jeGrund[label] ?? 0) + a.manHours);
+    }
+  }
+
   return {
     totalProjects: projects.length,
     done, inTime, critical, late, withoutDue,
@@ -518,6 +542,12 @@ export function dashboardKpis(result, weeks, range = {}) {
     firstOverloadHours: firstOverload ? firstOverload.overload : 0,
     bottleneck: bottleneck[0] ?? null,
     bottleneckRanking: bottleneck,
+    /**
+     * WIP-Ausnahme ("Aufträge gleichzeitig"/"Mitarbeiter je Auftrag" bei
+     * Leerlauf automatisch gelockert) - Stunden und Tage, an denen das im
+     * gewählten Zeitraum tatsächlich gegriffen hat, je Grenze.
+     */
+    wipAusnahmen,
     requiredFteWeeks,
     orbitalUtilization: orbital.utilization,
     orbital,

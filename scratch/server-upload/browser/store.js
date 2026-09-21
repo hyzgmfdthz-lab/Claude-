@@ -63,9 +63,32 @@ export function openBrowserStore() {
     if (!ls) return memorySnaps;
     try { return JSON.parse(readRaw(SNAP_KEY) ?? '[]'); } catch { return []; }
   };
+  /*
+   * FIX (gemeldet 21.09.2026, "Der Browser-Speicher ist voll"): schrieb bei
+   * vollem Speicher gar nicht mehr - auch nicht die neueste, gerade erst
+   * angelegte Sicherung. Anders als bei den benannten Staenden (siehe
+   * saveStates unten) fiel hier bei Speichermangel keine aeltere Sicherung
+   * heraus, um Platz zu schaffen - der Schreibversuch scheiterte einfach
+   * jedes Mal komplett und wiederholte sich bei jeder weiteren Aktion.
+   * Gleiche Loesung wie bei den Staenden: aelteste Sicherung faellt heraus,
+   * bis es wieder passt.
+   */
   const saveSnaps = (list) => {
     memorySnaps = list;
-    if (ls) writeRaw(SNAP_KEY, JSON.stringify(list));
+    if (!ls) return true;
+    let attempt = list;
+    while (attempt.length > 0) {
+      if (writeRaw(SNAP_KEY, JSON.stringify(attempt))) {
+        memorySnaps = attempt;
+        return true;
+      }
+      attempt = attempt.slice(0, -1);
+    }
+    // Selbst ganz ohne Sicherungen kein Platz - dann ist wenigstens der
+    // Fehler sichtbar (lastError von writeRaw), aber der Arbeitsstand
+    // bleibt im Speicher erhalten (memory/memorySnaps oben).
+    writeRaw(SNAP_KEY, '[]');
+    return false;
   };
 
   /** @type {any[]} */
@@ -107,7 +130,30 @@ export function openBrowserStore() {
     save(data, label = '') {
       memory = data;
       const json = JSON.stringify(data);
-      writeRaw(KEY, json);
+      /*
+       * FIX (gemeldet 21.09.2026, "Der Browser-Speicher ist voll"): der
+       * AKTUELLE Arbeitsstand - die Daten, mit denen gerade wirklich
+       * gearbeitet wird - ist wichtiger als jede Sicherung. Passte er
+       * bisher bei vollem Speicher nicht mehr hinein, scheiterte der
+       * Schreibversuch einfach; die Sicherungen (oft der groessere Teil
+       * der Speichernutzung) blieben unangetastet. Jetzt raeumen bei
+       * fehlendem Platz zuerst die Sicherungen, dann die benannten
+       * Staende Platz frei - erst wenn beides leer ist und es immer noch
+       * nicht passt, bleibt der aktuelle Stand nur im Arbeitsspeicher
+       * dieser Sitzung (sichtbarer Fehler ueber lastError).
+       */
+      if (!writeRaw(KEY, json)) {
+        let snaps = loadSnaps();
+        while (!writeRaw(KEY, json) && snaps.length > 0) {
+          snaps = snaps.slice(0, -1);
+          saveSnaps(snaps);
+        }
+        let staende = loadStates();
+        while (!writeRaw(KEY, json) && staende.length > 0) {
+          staende = staende.slice(0, -1);
+          saveStates(staende);
+        }
+      }
       if (label) {
         const list = loadSnaps();
         list.unshift({ id: `SNP-${Date.now()}`, createdAt: new Date().toISOString(), label, value: json });
