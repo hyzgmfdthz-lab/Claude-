@@ -7,8 +7,8 @@ zugehörige Prüfpaket, direkt in der gelieferten Originaldatei
 ## 1. Ausgelieferte Datei
 
 - **Datei:** `original/Armaturenbau-MEGC.html`
-- **Commit:** `c863874a48d7117c4dfba4fbc6c8034b91a7d96c` (Branch `claude/relaxed-fermat-9lvn1d`)
-- **SHA-256:** `eb3cef927a417837fef3c7be813313dd5047b49483c4c1588d4763271573ee81`
+- **Commit:** `2f340c8ea4a0379a50d24f63ad5674eb97c34909` (Branch `claude/relaxed-fermat-9lvn1d`)
+- **SHA-256:** `d803b8800b101213284f2a2022f0bff3729300b841fca41416ab49082136e234`
 - **Datenexport:** vollständig in der HTML enthalten (`seedDataset()` in
   `engine/seed.js`, unverändert). Es wurden keine Projekt-, Mannschafts- oder
   Regeldaten verändert – nur Rechenlogik in `engine/*.js`. Browserlokale
@@ -32,6 +32,9 @@ zugehörige Prüfpaket, direkt in der gelieferten Originaldatei
 | Mittel10 | Der Einsatzplan iterierte nur über Tage mit mindestens einer Buchung – komplett arbeitsfreie Tage fehlten samt Grund. | `engine/assignment.js`: Hauptschleife läuft jetzt über den vollständigen Arbeitskalender (`arbeitstage`, alle Nicht-OFF-Tage im gewählten Zeitraum), nicht mehr nur über `alloc.keys()`. | `scratch/t07.js` (T07) | **Bestanden** |
 | Bedingt11 | Eine arbeitsgangspezifische Frühstart-Regel (`releaseWeeksBeforeDue`) konnte eine ausdrücklich gemeldete Fehlteil-Sperre (`missingParts===true`) vollständig umgehen. | `engine/scheduler.js`, `opReleaseDate()`: eine gemeldete Fehlteil-Sperre gilt jetzt als harte Untergrenze für den ganzen Auftrag, unabhängig von einer arbeitsgangspezifischen Frühstart-Regel. Die routinemäßige Materialgrenze für Heften/Orbital bleibt unverändert arbeitsgangspezifisch. | `scratch/t09.js` (T09) | **Bestanden** |
 | Hoch03 | 12-/14-h-Fenster sollten angeblich auf eine Schicht zurückfallen. | Geprüft, **kein Fehler gefunden** – `schichtBesetzungVon()`/`platzStundenAm()` (bereits in der Datei vorhanden) bilden Schichtbesetzung und Fensterlänge bereits korrekt ab; zusammen mit dem neuen Personen-Stundenkonto (Kritisch02) ergibt sich die erwartete Kapazität. | `scratch/t03.js` (T03: 6 Schweißer/6 Maschinen/14h-Fenster/2 Schichten → 42 h) | **Bestanden** (ohne Codeänderung) |
+| Hoch06 | Eine Maßnahme galt als „reicht", sobald ihr Zusatzgewinn über den GANZEN 13-Wochen-Zeitraum die Engpasslücke deckte – unabhängig davon, ob die Stunden vor oder erst nach der Engpasswoche anfallen. | `engine/mehraufwand.js`: neue Größe `rechtzeitigStunden` (kumulierter Gewinn nur bis einschließlich der Engpasswoche, aus `rechner.gewinnJeWoche()`), ersetzt `stunden >= luecke` durch `rechtzeitigStunden >= luecke` bei jeder Einzelmaßnahme UND beim Gesamtpaket. | Gegen Startbestand direkt nachvollzogen: Maßnahme „Leiharbeiter" kippt von `reicht:true` (1.107 h Gesamtgewinn) auf korrekt `reicht:false` (nur 1.002 von 1.081,6 h rechtzeitig vor KW 2026-W48) | **Bestanden** |
+| Hoch07 | Ein prozentualer Mindestvorsprung (Überlappungsregel je Auftrag, z. B. „Orbital darf ab 15 % des Heftens starten") konnte je nach Auftragsgröße den absoluten Maximalvorsprung (`tacking.maxLeadHours`) übersteigen und den Arbeitsgang dauerhaft blockieren – ohne Warnung. | `engine/validation.js`: neue Prüfung je Projekt/Arbeitsgang, meldet `HEFTVORSPRUNG_WIDERSPRUCH` (Fehler) vor dem Planlauf, wenn der errechnete Mindestvorsprung in Stunden den Maximalvorsprung übersteigt. | `scratch/t11.js` (T11: 80 h Heften, 15 % ⇒ 12 h Mindestvorsprung > 10 h Maximum) | **Bestanden** |
+| Hoch08 | `processUtilization()`/`orbitalReport()` (engine/kpi.js) zählten immer ab Planungsbeginn bzw. bis zum letzten Auftragstermin – unabhängig vom angewählten Zeitraum. Eine Ein-Tages-Auswahl lieferte die Summe vieler Tage. | Beide Funktionen erhalten einen `from`-Parameter; `dashboardKpis()` reicht dafür den bereits vorhandenen Fensterwert (`windowStart`/`windowEnd`) durch statt `lastRelevant`. | `scratch/t12.js` (T12: Auswahl nur 21.09.2026 → `orbital.days=1`, `orbital.capacity=21 h` – exakt der im Audit genannte Wert) | **Bestanden** |
 | Hoch10 (Hydrofenster/Samstag) | Sollte angeblich am Samstag öffnen. | Geprüft, **kein Fehler gefunden** – `hydroWindowOpen()` ist unabhängig von der Samstagsaktivierung. | Direkter Test gegen `dayCapacity()` an einem aktivierten Samstag → `HYDRO capUnits=0`, `limiter=HYDRO_WINDOW` | **Bestanden** (ohne Codeänderung) |
 
 ## 3. Vorher/Nachher auf identischem Bestand (37 Projekte, Stichtag 10.09.2026)
@@ -42,6 +45,9 @@ zugehörige Prüfpaket, direkt in der gelieferten Originaldatei
 | OTD gegen Erstzusage / `zielErreicht` | 10,81 % / false | 10,81 % / false (Kritisch01 betraf hier keinen konkreten Auftrag der Baseline, siehe unten) |
 | Summe Verspätungstage | 1.258 | **1.259** (+1) |
 | Leihkosten-Beispielrechnung (2 Leihkräfte, 12 Wochen) | 60.885 € (Netto-Kapazitätsgewinn × Satz) | **74.250 €** (900 Rechnungsstunden × 55 €) |
+| Mehraufwand „Leiharbeiter" (Engpasswoche 2026-W48, Lücke 1.081,6 h) | „reicht" = true (1.107 h Gesamtgewinn ≥ Lücke) | **„reicht" = false** (nur 1.002 von 1.081,6 h vor der Engpasswoche wirksam) |
+| Mehraufwand-Gesamtpaket (Überstunden + 2. Platz + 2 Leihkräfte) | kein Ausweis der Rechtzeitigkeit | 1.283 h rechtzeitig ≥ 1.081,6 h Lücke → **„reicht" = true**, jetzt mit ausgewiesener Zeitkomponente |
+| Orbitalauswertung bei Auswahl „nur 21.09.2026" | 168 h / 8 Tage (Summe seit Planungsbeginn) | **21 h / 1 Tag** (nur der ausgewählte Tag) |
 
 Die Verschiebung von 1.258 auf 1.259 Verspätungstage kommt ausschließlich aus
 der Hoch04-Korrektur (Zeitachse bei Ende-Start-Abhängigkeiten): mindestens ein
@@ -75,6 +81,8 @@ T05 PASSED   (Hoch04-Gegenstück – kurzer serieller Ablauf, selber Tag erlaubt
 T06 PASSED   (Mittel09 – persönliches Budget 7 statt 7,5 h)
 T07 PASSED   (Mittel10 – vollständiger Kalender inkl. arbeitsfreier Tage)
 T09 PASSED   (Bedingt11 – Fehlteilsperre haelt gegen Fruehstart-Regel)
+T11 PASSED   (Hoch07 – Heftvorsprung-Widerspruch wird vor dem Planlauf gemeldet)
+T12 PASSED   (Hoch08 – Ein-Tages-Auswahl liefert Ein-Tages-Zahlen, 21 h Orbital)
 T13 PASSED   (Hoch05 – Rechnungsstunden statt Kapazitätsgewinn, 900 h / 49.500 €)
 ```
 
@@ -90,38 +98,38 @@ zugehörige Test-Infrastruktur/den Build außerhalb der HTML). Die hier
 gezeigten Gegenproben sind Motor-Gegenproben (Node, isoliert), keine
 Oberflächentests.
 
+
 ## 5. Offene Punkte – nicht in dieser Runde bearbeitet
 
-Diese Runde hat sich an die Priorität aus Abschnitt 5 des Arbeitsauftrags
-gehalten (Kritisch02 zuerst, dann die eng umrissenen Punkte 04/05/09/10/11).
-**Nicht bearbeitet** und weiterhin offen:
+Bearbeitet wurden in dieser Runde: Kritisch01, Kritisch02, Hoch04, Hoch05,
+Hoch06, Hoch07, Hoch08, Mittel09, Mittel10, Bedingt11 – jeweils mit
+Gegenprobe. Zusätzlich geprüft, aber kein Fehler gefunden: Hoch03
+(Schichtfenster), das Hydro-Fenster gegen Samstagsarbeit. Weiterhin offen:
 
-- **R06 „feste Schicht, bewegliche Aufträge"**: keine eigene Codeänderung
-  vorgenommen. Nach Durchsicht von `engine/scheduler.js` (Pool-basierte
+- R06 "feste Schicht, bewegliche Aufträge": keine eigene Codeänderung
+  vorgenommen. Nach Durchsicht von engine/scheduler.js (Pool-basierte
   Terminierung nach Priorität, unabhängig von Schichten) und
-  `engine/assignment.js` (schichttreue Zuordnung über `pinnedOps`/
-  `schichtVon`) erscheint die Regel durch das Zusammenspiel beider Module
-  bereits strukturell erfüllt: die Terminierung füllt freie Kapazität mit
-  dem nächsten ausführbaren Auftrag (unabhängig von dessen Priorität-Rang,
+  engine/assignment.js (schichttreue Zuordnung über pinnedOps/schichtVon)
+  erscheint die Regel durch das Zusammenspiel beider Module bereits
+  strukturell erfüllt: die Terminierung füllt freie Kapazität mit dem
+  nächsten ausführbaren Auftrag (unabhängig von dessen Prioritäts-Rang,
   solange Vorgänger-/Freigabebedingungen erfüllt sind), die Zuordnung
-  versetzt niemanden in eine andere Schicht. Das ist **keine unabhängig
-  geprüfte Aussage** mit eigener Gegenprobe (T08) – nur eine Einschätzung
-  aus dem Code. T08 sollte in der nächsten Runde als echte Gegenprobe
-  gebaut werden, bevor das als bestätigt gilt.
-- **Hoch06** (Zusatzstunden nach Fälligkeit als rechtzeitig gezählt),
-  **Hoch07** (Heftvorsprung-Widerspruch nicht erkannt/abgewiesen),
-  **Hoch08** (Zeitraumfilter zieht Wochenwerte statt Tageswerte in
-  Auswertungen wie `processUtilization`/Orbitalauswertung): **nicht
-  geprüft und nicht behoben**. Alle drei sind im Arbeitsauftrag als
-  eigene Folgerunden vorgesehen ("Zeitraumabgrenzung und vollständige
-  Kapazitätskonten") und wurden hier bewusst zurückgestellt, um Kritisch02
-  nicht mit weiteren gleichzeitigen Änderungen zu vermischen.
-- **T08, T11, T12, T14–T18** wurden nicht als Gegenproben gebaut und daher
-  auch nicht geprüft.
-- **Zweiter Sägeplatz / Helferregeln** (offene Punkte aus Abschnitt 4 des
-  Arbeitsauftrags): **nicht angefasst**. Die Datei enthält unverändert nur
-  die ursprünglich bestätigten Werte; es wurde keine Annahme über
-  Zusatzplätze oder Helferleistung ergänzt oder entfernt.
+  versetzt niemanden in eine andere Schicht. Das ist keine unabhängig
+  geprüfte Aussage mit eigener Gegenprobe (T08) - nur eine Einschätzung aus
+  dem Code. T08 sollte in der nächsten Runde als echte Gegenprobe gebaut
+  werden, bevor das als bestätigt gilt.
+- T14-T18 (unterschiedliche Zuschläge, bestehende Mehrarbeit nicht doppelt
+  vorschlagen, Leihstarts ohne Duplikate, persönliche Bindung/Abwesenheit)
+  wurden nicht als Gegenproben gebaut und daher nicht geprüft. Für T16
+  (Leihstarts ohne Duplikate) spricht der Code in engine/team.js
+  (mitZusatzPersonal: nutzt zuerst freie, bereits angelegte
+  Leiharbeiter-Plätze, bevor neue angelegt werden) dafür, dass das bereits
+  korrekt ist - das ist aber ebenfalls nur eine Einschätzung, keine
+  geprüfte Aussage.
+- Zweiter Sägeplatz / Helferregeln (offene Punkte aus Abschnitt 4 des
+  Arbeitsauftrags): nicht angefasst. Die Datei enthält unverändert nur die
+  ursprünglich bestätigten Werte; es wurde keine Annahme über Zusatzplätze
+  oder Helferleistung ergänzt oder entfernt.
 - Qualifikationsmatrix, Leihverfügbarkeit, Samstagssätze: unverändert, wie
   im Arbeitsauftrag als offen markiert.
 
@@ -129,10 +137,11 @@ gehalten (Kritisch02 zuerst, dann die eng umrissenen Punkte 04/05/09/10/11).
 
 Die in dieser Runde behobenen Punkte erfüllen das genannte Kriterium
 ("Kein zugesagter Fertigstellungstermin darf auf unbesetzten Stunden,
-Doppelbelegung oder noch nicht ausgeführter Vorarbeit beruhen") **für den
-Kern der Terminierung** (Kritisch02, Hoch04) und für die genannten
-Berichtsfehler (Kritisch01, Hoch05, Mittel09, Mittel10, Bedingt11) –
-jeweils durch eine eigene, gegen den Arbeitsauftrag geschriebene Gegenprobe
-nachgewiesen, nicht nur durch einen grünen Testlauf. Eine **vollständige**
-Abnahme im Sinne des Arbeitsauftrags (alle 18 Gegenproben, R06 mit eigener
-Gegenprobe, Hoch03/06/07/08 abschließend geklärt) steht noch aus.
+Doppelbelegung oder noch nicht ausgeführter Vorarbeit beruhen") für den
+Kern der Terminierung (Kritisch02, Hoch04, Bedingt11) und für die
+genannten Berichts-/Bewertungsfehler (Kritisch01, Hoch05, Hoch06, Hoch07,
+Hoch08, Mittel09, Mittel10) - jeweils durch eine eigene, gegen den
+Arbeitsauftrag geschriebene Gegenprobe nachgewiesen, nicht nur durch einen
+grünen Testlauf. Eine vollständige Abnahme im Sinne des Arbeitsauftrags
+(alle 18 Gegenproben, R06 mit eigener Gegenprobe) steht noch aus - siehe
+Abschnitt 5.
