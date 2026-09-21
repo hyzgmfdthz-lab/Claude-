@@ -3,8 +3,8 @@
  */
 
 import { OPERATIONS, OPERATION_BY_ID, PROJECT_STATUS, round1, round2 } from './model.js';
-import { LIMITER, LIMITER_LABEL } from './capacity.js';
-import { cmpDate, weekKey } from './calendar.js';
+import { LIMITER, LIMITER_LABEL, dayCapacity } from './capacity.js';
+import { cmpDate, weekKey, addDays } from './calendar.js';
 
 /**
  * Zusaetzlich benoetigte Mitarbeiter je Kalenderwoche.
@@ -434,12 +434,29 @@ export function dashboardKpis(result, weeks, range = {}) {
    * Termin: im Startdatenbestand 9.012 h statt 8.649 h, also 363 h
    * Kapazitaet, die es bis zum Termin gar nicht mehr gibt. Gemeldet von der
    * Abteilungsleitung am 18.09.2026, als die Zahlen nicht aufgingen.
+   *
+   * FIX (gefunden beim Portieren in die Netzwerkversion, 21.09.2026):
+   * `result.daySeries` endet, sobald alle Auftraege fertig sind
+   * (`states.every(finished)` in scheduler.js) - das ist eine Optimierung
+   * der Terminierung, keine Kalenderaussage. Reicht die Kapazitaet, um vor
+   * dem Fenster-Ende fertig zu werden, brach die Summe schon dort ab und
+   * zaehlte die Resttage bis zum Termin gar nicht mehr mit. Ergebnis: MEHR
+   * Kapazitaet (z. B. laengeres Zeitfenster, Ueberstunden) konnte
+   * `availableHours` sogar SENKEN, weil der Plan dadurch frueher fertig war
+   * - genau der Prognoseeinfluss, den der Kommentar oben ausdruecklich
+   * ausschliessen wollte. Jetzt taggenau direkt aus der Kapazitaetsformel,
+   * unabhaengig davon, wie weit die Terminierung tatsaechlich gerechnet hat.
    */
-  const availableHours = round2((result.daySeries ?? []).reduce((a, d) => {
-    if (windowEnd && cmpDate(d.date, windowEnd) > 0) return a;
-    if (windowStart && cmpDate(d.date, windowStart) < 0) return a;
-    return a + (Number(d.poolCapacity) || 0);
-  }, 0));
+  const availableHours = round2((() => {
+    const cfg = result.config;
+    const von = windowStart && cmpDate(windowStart, cfg.planningDate) > 0 ? windowStart : cfg.planningDate;
+    if (!windowEnd || cmpDate(von, windowEnd) > 0) return 0;
+    let sum = 0;
+    for (let d = von; cmpDate(d, windowEnd) <= 0; d = addDays(d, 1)) {
+      sum += Number(dayCapacity(cfg, d).poolHours) || 0;
+    }
+    return sum;
+  })());
   const overloadHours = round2(windowWeeks.reduce((a, w) => a + w.overload, 0));
   const firstOverload = windowWeeks.find((w) => w.overload > 0.5);
 
