@@ -7,8 +7,8 @@ zugehörige Prüfpaket, direkt in der gelieferten Originaldatei
 ## 1. Ausgelieferte Datei
 
 - **Datei:** `original/Armaturenbau-MEGC.html`
-- **Commit:** `2f340c8ea4a0379a50d24f63ad5674eb97c34909` (Branch `claude/relaxed-fermat-9lvn1d`)
-- **SHA-256:** `d803b8800b101213284f2a2022f0bff3729300b841fca41416ab49082136e234`
+- **Commit:** `4eb4fdf42848793732e6b534f1d759a3a2f899ac` (Branch `claude/relaxed-fermat-9lvn1d`)
+- **SHA-256:** `b16f338dbf785e87085b39804e7a6dd0a59c2957a9d3ec07eef26944995e7936`
 - **Datenexport:** vollständig in der HTML enthalten (`seedDataset()` in
   `engine/seed.js`, unverändert). Es wurden keine Projekt-, Mannschafts- oder
   Regeldaten verändert – nur Rechenlogik in `engine/*.js`. Browserlokale
@@ -36,6 +36,7 @@ zugehörige Prüfpaket, direkt in der gelieferten Originaldatei
 | Hoch07 | Ein prozentualer Mindestvorsprung (Überlappungsregel je Auftrag, z. B. „Orbital darf ab 15 % des Heftens starten") konnte je nach Auftragsgröße den absoluten Maximalvorsprung (`tacking.maxLeadHours`) übersteigen und den Arbeitsgang dauerhaft blockieren – ohne Warnung. | `engine/validation.js`: neue Prüfung je Projekt/Arbeitsgang, meldet `HEFTVORSPRUNG_WIDERSPRUCH` (Fehler) vor dem Planlauf, wenn der errechnete Mindestvorsprung in Stunden den Maximalvorsprung übersteigt. | `scratch/t11.js` (T11: 80 h Heften, 15 % ⇒ 12 h Mindestvorsprung > 10 h Maximum) | **Bestanden** |
 | Hoch08 | `processUtilization()`/`orbitalReport()` (engine/kpi.js) zählten immer ab Planungsbeginn bzw. bis zum letzten Auftragstermin – unabhängig vom angewählten Zeitraum. Eine Ein-Tages-Auswahl lieferte die Summe vieler Tage. | Beide Funktionen erhalten einen `from`-Parameter; `dashboardKpis()` reicht dafür den bereits vorhandenen Fensterwert (`windowStart`/`windowEnd`) durch statt `lastRelevant`. | `scratch/t12.js` (T12: Auswahl nur 21.09.2026 → `orbital.days=1`, `orbital.capacity=21 h` – exakt der im Audit genannte Wert) | **Bestanden** |
 | Hoch10 (Hydrofenster/Samstag) | Sollte angeblich am Samstag öffnen. | Geprüft, **kein Fehler gefunden** – `hydroWindowOpen()` ist unabhängig von der Samstagsaktivierung. | Direkter Test gegen `dayCapacity()` an einem aktivierten Samstag → `HYDRO capUnits=0`, `limiter=HYDRO_WINDOW` | **Bestanden** (ohne Codeänderung) |
+| R06 / WIP-Ausnahme | Am Livestand beobachtet (Screenshot Einsatzplan, 21.09.2026): Personen mit „Arbeit des Tages ist vergeben" standen ohne jede Arbeit da, obwohl der Text selbst „höchstens 3 Aufträge gleichzeitig"/„höchstens 4 Mitarbeiter je Auftrag" als Ursache nannte – organisatorische WIP-Grenzen, keine physische Sperre. Nutzerentscheidung: Grenze bei drohendem Leerlauf automatisch und sichtbar lockern. | `engine/scheduler.js`: `runSchedule()` macht nach dem normalen Durchlauf zwei gezielte Zusatzdurchgänge, nur wenn nach den harten Grenzen (Vorgänger, Material, Qualifikation, Plätze, Maschinen) noch echter Poolrest übrig ist – (1) ganz wegen „höchstens N Aufträge" übersprungene Aufträge bekommen doch ihren Durchlauf, (2) jeder offene Auftrag bekommt einen zweiten Durchlauf mit aufgehobener „Mitarbeiter je Auftrag"-Grenze. Jede genutzte Ausnahme wird sichtbar in `dayRecord.wipAusnahmen` vermerkt. | `scratch/t08.js` (2 Personen, Grenzen auf 1/1 gesetzt → trotzdem 14 statt 7 h, Ausnahme vermerkt), `scratch/t08b.js` (Pool bereits voll → keine Ausnahme, keine erfundene Kapazität) | **Bestanden** |
 
 ## 3. Vorher/Nachher auf identischem Bestand (37 Projekte, Stichtag 10.09.2026)
 
@@ -84,6 +85,8 @@ T09 PASSED   (Bedingt11 – Fehlteilsperre haelt gegen Fruehstart-Regel)
 T11 PASSED   (Hoch07 – Heftvorsprung-Widerspruch wird vor dem Planlauf gemeldet)
 T12 PASSED   (Hoch08 – Ein-Tages-Auswahl liefert Ein-Tages-Zahlen, 21 h Orbital)
 T13 PASSED   (Hoch05 – Rechnungsstunden statt Kapazitätsgewinn, 900 h / 49.500 €)
+T08 PASSED   (R06/WIP-Ausnahme – WIP-Grenzen erzwingen keinen Leerlauf mehr)
+T08b PASSED  (Gegenprobe – ohne echten Poolrest bleibt die Grenze hart)
 ```
 
 Zusätzlich nach **jeder** Einzeländerung erneut geprüft: die volle Baseline
@@ -102,22 +105,24 @@ Oberflächentests.
 ## 5. Offene Punkte – nicht in dieser Runde bearbeitet
 
 Bearbeitet wurden in dieser Runde: Kritisch01, Kritisch02, Hoch04, Hoch05,
-Hoch06, Hoch07, Hoch08, Mittel09, Mittel10, Bedingt11 – jeweils mit
-Gegenprobe. Zusätzlich geprüft, aber kein Fehler gefunden: Hoch03
-(Schichtfenster), das Hydro-Fenster gegen Samstagsarbeit. Weiterhin offen:
+Hoch06, Hoch07, Hoch08, Mittel09, Mittel10, Bedingt11, R06/WIP-Ausnahme –
+jeweils mit Gegenprobe. Zusätzlich geprüft, aber kein Fehler gefunden:
+Hoch03 (Schichtfenster), das Hydro-Fenster gegen Samstagsarbeit. Weiterhin
+offen:
 
-- R06 "feste Schicht, bewegliche Aufträge": keine eigene Codeänderung
-  vorgenommen. Nach Durchsicht von engine/scheduler.js (Pool-basierte
-  Terminierung nach Priorität, unabhängig von Schichten) und
-  engine/assignment.js (schichttreue Zuordnung über pinnedOps/schichtVon)
-  erscheint die Regel durch das Zusammenspiel beider Module bereits
-  strukturell erfüllt: die Terminierung füllt freie Kapazität mit dem
-  nächsten ausführbaren Auftrag (unabhängig von dessen Prioritäts-Rang,
-  solange Vorgänger-/Freigabebedingungen erfüllt sind), die Zuordnung
-  versetzt niemanden in eine andere Schicht. Das ist keine unabhängig
-  geprüfte Aussage mit eigener Gegenprobe (T08) - nur eine Einschätzung aus
-  dem Code. T08 sollte in der nächsten Runde als echte Gegenprobe gebaut
-  werden, bevor das als bestätigt gilt.
+- R06 war ursprünglich nur strukturell eingeschätzt (keine eigene
+  Gegenprobe). Ein von dir gezeigter Screenshot aus dem laufenden Stand
+  (Einsatzplan, "Arbeit des Tages ist vergeben") deckte einen konkreten
+  Fall auf: Organisatorische WIP-Grenzen ("höchstens 3 Aufträge
+  gleichzeitig"/"höchstens 4 Mitarbeiter je Auftrag") konnten Leerlauf
+  erzwingen, obwohl noch echte, freigegebene Kapazität da war. Nach
+  deiner Entscheidung (Grenze bei Leerlauf automatisch lockern, mit
+  sichtbarem Hinweis) ist das jetzt behoben und mit T08/T08b geprüft -
+  siehe Änderungsliste oben. Nicht Teil davon: der andere, ebenfalls
+  mögliche Grund für Leerlauf (die Mannschaftsstunden sind insgesamt
+  ausgereizt - siehe Beispiel TOBE/10.09.2026 im Chat) ist **kein**
+  Fehler, sondern bedeutet, dass an dem Tag wirklich keine zusätzliche
+  Stunde mehr möglich ist.
 - T14-T18 (unterschiedliche Zuschläge, bestehende Mehrarbeit nicht doppelt
   vorschlagen, Leihstarts ohne Duplikate, persönliche Bindung/Abwesenheit)
   wurden nicht als Gegenproben gebaut und daher nicht geprüft. Für T16
@@ -138,10 +143,10 @@ Gegenprobe. Zusätzlich geprüft, aber kein Fehler gefunden: Hoch03
 Die in dieser Runde behobenen Punkte erfüllen das genannte Kriterium
 ("Kein zugesagter Fertigstellungstermin darf auf unbesetzten Stunden,
 Doppelbelegung oder noch nicht ausgeführter Vorarbeit beruhen") für den
-Kern der Terminierung (Kritisch02, Hoch04, Bedingt11) und für die
-genannten Berichts-/Bewertungsfehler (Kritisch01, Hoch05, Hoch06, Hoch07,
-Hoch08, Mittel09, Mittel10) - jeweils durch eine eigene, gegen den
-Arbeitsauftrag geschriebene Gegenprobe nachgewiesen, nicht nur durch einen
-grünen Testlauf. Eine vollständige Abnahme im Sinne des Arbeitsauftrags
-(alle 18 Gegenproben, R06 mit eigener Gegenprobe) steht noch aus - siehe
+Kern der Terminierung (Kritisch02, Hoch04, Bedingt11, R06/WIP-Ausnahme)
+und für die genannten Berichts-/Bewertungsfehler (Kritisch01, Hoch05,
+Hoch06, Hoch07, Hoch08, Mittel09, Mittel10) - jeweils durch eine eigene,
+gegen den Arbeitsauftrag geschriebene Gegenprobe nachgewiesen, nicht nur
+durch einen grünen Testlauf. Eine vollständige Abnahme im Sinne des
+Arbeitsauftrags (alle 18 Gegenproben, T14-T18) steht noch aus - siehe
 Abschnitt 5.
