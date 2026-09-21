@@ -16435,7 +16435,13 @@ function defaultPlaces() {
      * Endkontrolle: zwei Plaetze, JE EINE Person - derselbe Fehler wie bei
      * der Vormontage, richtiggestellt am 19.09.2026.
      */
-    ENDKONTROLLE: { places: 2, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – bestätigt 19.09.2026' },
+    /*
+     * FIX (bestätigt 21.09.2026): "Zusätzliche Plätze sind bei Heften,
+     * Vormontage und Endkontrolle eine Möglichkeit" - ohne maxPlaces war
+     * ein zusätzlicher Platz bei Endkontrolle als Maßnahme gar nicht
+     * waehlbar (patchPlatz in engine/mehraufwand.js braucht maxPlaces>0).
+     */
+    ENDKONTROLLE: { places: 2, maxPlaces: 3, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – bestätigt 19.09.2026; dritter Platz als Maßnahme möglich – bestätigt 21.09.2026' },
     REINIGEN: { places: 1, workersPerPlace: 1 },
   };
 }
