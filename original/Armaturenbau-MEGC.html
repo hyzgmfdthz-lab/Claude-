@@ -18584,7 +18584,7 @@ function allocateProjectDay(st, ctx) {
 
       if (!opGateOpen(st, op, date)) continue;
 
-      const allow = allowanceFor(st, op, ctx.maxLead);
+      const allow = allowanceFor(st, op, ctx.maxLead, ctx);
       if (allow.units <= EPS) continue;
 
       const f = op.manHourFactor;
@@ -18735,7 +18735,7 @@ function diagnose(st, ctx, projectManRest) {
     const op = st.opState[opDef.opId];
     if (!op || op.remainingUnits <= EPS) continue;
     if (!opGateOpen(st, op, date)) continue;
-    const allow = allowanceFor(st, op, ctx.maxLead);
+    const allow = allowanceFor(st, op, ctx.maxLead, ctx);
     if (allow.units <= EPS) continue; // Vorgaenger/Vorsprung -> Ursache liegt beim Vorgaenger
 
     const f = op.manHourFactor;
@@ -18786,6 +18786,21 @@ function opReleaseDate(op, project, rel) {
   if (brauchtMaterial && rel.materialGate && cmpDate(rel.materialGate, eigen ?? rel.materialGate) > 0) {
     return rel.materialGate;
   }
+  /*
+   * FIX Bedingt11 (Audit 20.09.2026): eine ausdruecklich gemeldete
+   * Fehlteil-Sperre (project.missingParts === true) ist keine
+   * arbeitsgangspezifische Materialgrenze, sondern eine harte Sperre des
+   * GANZEN Auftrags - von Hand gesetzt, nicht aus dem Kalender abgeleitet.
+   * Eine Fruehstart-Regel fuer einen einzelnen, nicht materialkritischen
+   * Arbeitsgang (z. B. "Saegen darf 20 Wochen frueher starten") darf diese
+   * Sperre nicht umgehen. Die routinemaessige Materialgrenze (oben,
+   * `brauchtMaterial`) bleibt davon unberuehrt - sie gilt weiterhin nur fuer
+   * die Arbeitsgaenge, die das Material tatsaechlich brauchen.
+   */
+  if (project.missingParts === true && rel.fehlteilTor
+    && (!eigen || cmpDate(rel.fehlteilTor, eigen) > 0)) {
+    return rel.fehlteilTor;
+  }
   return eigen;
 }
 
@@ -18815,7 +18830,7 @@ function opPriority(st, opDef, targetLead) {
  * Abhaengigkeitsnetzes (FS, Ueberlappung, Maximalvorsprung).
  * @returns {{units:number, cause:string}}
  */
-function allowanceFor(st, op, maxLead) {
+function allowanceFor(st, op, maxLead, ctx) {
   let allowed = op.remainingUnits;
   let cause = LIMITER.NONE;
 
@@ -18843,6 +18858,28 @@ function allowanceFor(st, op, maxLead) {
       if (room < allowed) { allowed = room; cause = LIMITER.TACK_LEAD; }
     } else if (pred.remainingUnits > EPS) {
       return { units: 0, cause: LIMITER.PREDECESSOR };
+    } else if (ctx && pred.lastDate === ctx.date) {
+      /*
+       * FIX Hoch04 (Audit 20.09.2026): Ende-Start heisst ENDE, nicht "irgendwann
+       * heute fertig geworden".
+       *
+       * Der Vorgaenger ist HEUTE fertig geworden. Ohne Uhrzeit im Modell (es
+       * wird tagesweise, nicht stundenweise gerechnet) ist die Naeherung:
+       * Er hat dafuer einen Teil des heutigen Zeitfensters gebraucht - was
+       * danach noch uebrig ist, steht dem echten Ende-Start-Nachfolger heute
+       * noch zur Verfuegung, nicht mehr. Ein kurzer Vorgaenger (1 von 7 h)
+       * laesst dem Nachfolger noch 6 h desselben Tages (T05); ein
+       * Vorgaenger, der das ganze Tagesfenster gebraucht hat (7 von 7 h),
+       * laesst nichts mehr uebrig - der Nachfolger beginnt dann erst am
+       * naechsten Tag (T04). Vorher sah die Prüfung nur "remainingUnits
+       * bereits 0" und liess zwei volle Arbeitstage auf denselben Kalendertag
+       * rutschen.
+       */
+      const predWindow = Number(ctx.cap?.byOp?.[p.opId]?.detail?.operatingHours ?? ctx.cap?.hoursPerEmployee ?? 0);
+      const predUsedToday = Number(pred.byDate?.[ctx.date] ?? 0) * (Number(pred.manHourFactor) || 1);
+      const uebrigStunden = Math.max(0, predWindow - predUsedToday);
+      const uebrigUnits = uebrigStunden / (Number(op.manHourFactor) || 1);
+      if (uebrigUnits < allowed) { allowed = uebrigUnits; cause = LIMITER.PREDECESSOR; }
     }
   }
 
