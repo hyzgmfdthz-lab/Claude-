@@ -1,0 +1,362 @@
+/**
+ * Einsatzplan je Mitarbeiter.
+ *
+ * Die Terminierung rechnet mit Stunden, nicht mit Personen. Fuer die
+ * Werkstatt ist aber genau das die Frage: "Was mache ich am Dienstag, an
+ * welchem Auftrag?" Deshalb werden die eingeplanten Stunden nachtraeglich
+ * auf die Mannschaft verteilt.
+ *
+ * ACHTUNG - dieser Plan war verdreht und wurde am 18.09.2026
+ * zurueckgewiesen: "Der Einsatzplan ist auch verdreht und nicht logisch.
+ * MAAP wird an manchen Tagen gar nicht geplant, obwohl anwesend."
+ *
+ * Der Vorwurf traf zu. Der Kommentar hier behauptete "gleichmaessige
+ * Auslastung", der Code tat das Gegenteil: Er gab der Person mit dem
+ * groessten Restbudget ihr GANZES Tagesbudget auf einmal
+ * (`Math.min(rest, restStunden)`). Damit nahm der Erste 7,5 h, der Zweite
+ * den Rest - und alle weiteren gingen leer aus. Ueber den Horizont kam so
+ * heraus: JARO 1.170 h, TOBE 21 h, STWUE 3 h. Kein Plan, den man aushaengen
+ * kann.
+ *
+ * Neu geplant wird, wie es die Abteilungsleitung tun wuerde:
+ *
+ *   1. Nur wer den Arbeitsgang darf, bekommt ihn (Qualifikationsmatrix).
+ *   2. Je Tag hat jede Person ein Stundenbudget: Zeitanteil x Arbeitszeit.
+ *   3. Ein Platz, eine Person. An einer Saege stehen nicht fuenf Leute.
+ *      Die Zahl der gleichzeitig Eingesetzten ist auf die PLAETZE des
+ *      Arbeitsganges begrenzt (beim Orbitalschweissen auf die Schweisser,
+ *      die die Maschinen bedienen koennen).
+ *   4. Knappe Qualifikationen zuerst - sonst belegt ein Springer die
+ *      Stunden, die anschliessend beim Engpass fehlen.
+ *   5. Ausgewaehlt wird, wer BISHER am wenigsten Stunden hat. Damit
+ *      rotiert die Arbeit ueber die Mannschaft, statt sich bei den ersten
+ *      Kuerzeln zu sammeln. Bei Gleichstand bleibt jemand auf dem
+ *      Arbeitsgang, den er heute schon macht (keine unnoetigen
+ *      Platzwechsel), danach entscheidet das Kuerzel - der Plan ist
+ *      reproduzierbar.
+ *   6. Wer anwesend ist und trotzdem nichts bekommt, steht MIT GRUND da:
+ *      kein Platz frei, keine passende Qualifikation oder schlicht keine
+ *      Arbeit mehr. Eine leere Zeile ohne Grund ist keine Auskunft.
+ *   7. Was uebrig bleibt, weil die Mannschaft kleiner ist als die
+ *      gerechnete Besetzung, steht offen als "noch zuzuordnen" - es wird
+ *      niemand erfunden.
+ */
+
+import { OPERATION_BY_ID, round2 } from './model.js';
+import { peopleOf, personPresent, absenceOn, personEffectiveFactor } from './team.js';
+import { placesFor, workersPerPlace, DAY_KIND } from './capacity.js';
+import { schichtenJeArbeitsgang, wochenSchichten, SCHICHT_STUNDEN } from './schichtplan.js';
+import { weekKey } from './calendar.js';
+
+/**
+ * @param {any} result Ergebnis von runSchedule
+ * @param {any} config
+ * @param {{from?:string, to?:string}} [range] Zeitraum (leer = alles)
+ */
+export function assignPeople(result, config, range = {}) {
+  const people = peopleOf(config);
+  const tage = [];
+  /** @type {Record<string, any>} */
+  const byPerson = {};
+  for (const p of people) {
+    byPerson[p.id] = {
+      id: p.id, role: p.role ?? '', factor: Number(p.factor ?? 1) || 0,
+      hours: 0, byOp: {}, byWeek: {}, absentDays: 0,
+      /** Anwesend, aber ohne Arbeit - und warum */
+      idleDays: 0, idleReasons: {},
+    };
+  }
+  let offen = 0;
+
+  const capOf = new Map(result.daySeries.map((d) => [d.date, d]));
+  const alloc = new Map();
+  for (const a of result.allocations) {
+    if (range.from && a.date < range.from) continue;
+    if (range.to && a.date > range.to) continue;
+    (alloc.get(a.date) ?? alloc.set(a.date, []).get(a.date)).push(a);
+  }
+
+  /*
+   * FIX Mittel10 (Audit 20.09.2026): vollstaendig arbeitsfreie Tage
+   * verschwinden nicht mehr aus dem Einsatzplan.
+   *
+   * Bisher liefen alle folgenden Schritte nur ueber `alloc.keys()` - also
+   * ausschliesslich Tage, an denen IRGENDEIN Auftrag irgendetwas gebucht
+   * hat. Ein Tag, an dem die Mannschaft komplett ohne freigegebene Arbeit
+   * dastand (Beispiel: Personal ab dem Stichtag da, Material/Freigabe erst
+   * Tage spaeter), tauchte im Plan gar nicht auf - weder als Zeile noch in
+   * `idleDays`. Jetzt zaehlt der VOLLSTAENDIGE Kalender (Arbeitstage und
+   * Samstage im gewaehlten Zeitraum), unabhaengig davon, ob an dem Tag
+   * gebucht wurde.
+   */
+  const arbeitstage = result.daySeries
+    .filter((d) => d.kind !== DAY_KIND.OFF)
+    .filter((d) => (!range.from || d.date >= range.from) && (!range.to || d.date <= range.to))
+    .map((d) => d.date);
+
+  const projectName = new Map((result.projects ?? []).map((p) => [p.id, p.orderNo ?? p.id]));
+
+  /*
+   * Schichten - wochenweise, nie tageweise.
+   *
+   * Vorgabe der Abteilungsleitung (18.09.2026): "plane dann an den
+   * Arbeitsplaetzen so die Schichten dass es maximal effizient ist unter
+   * Beruecksichtigung der 2-3 Schicht und der MA darf die Schichten nur
+   * wochenweise wechseln nicht tageweise."
+   *
+   * Laeuft ein Arbeitsgang zweischichtig, arbeiten dort Leute der ersten
+   * UND der zweiten Schicht - je Schicht aber nur so viele, wie er Plaetze
+   * hat. Wer in der Spaetschicht ist, kann an einem einschichtigen
+   * Arbeitsgang nicht arbeiten.
+   */
+  const schichtenJeOp = schichtenJeArbeitsgang(config);
+  const wochenListe = [...new Set(arbeitstage.map((d) => weekKey(d)))].sort();
+  const eingeplantePersonen = people.filter((p) => p.defaultActive !== false
+    || Object.values(p.weeks ?? {}).some(Boolean));
+  const schichtplan = wochenSchichten(config, wochenListe, eingeplantePersonen);
+  /** Stunden, die eine Schicht nicht besetzen konnte - je Arbeitsgang */
+  const unbesetzteSchichten = {};
+
+  for (const date of arbeitstage) {
+    const list = alloc.get(date) ?? [];
+    const day = capOf.get(date);
+    const hoursPerEmployee = Number(day?.hoursPerEmployee ?? 7.5) || 7.5;
+    /*
+     * FIX Mittel09 (Audit 20.09.2026): Produktivitaet gehoert ins
+     * persoenliche Budget.
+     *
+     * Hier stand nur `factor * hoursPerEmployee` - die reine
+     * Anwesenheitsdauer (7,5 h). Die Terminierung (engine/scheduler.js,
+     * ctx.personRest) rechnet dieselbe Person aber mit Produktivitaets- UND
+     * Einarbeitungsfaktor (rund 7 h). Beide Anzeigen muessen dieselbe
+     * Stundenart verwenden - sonst bucht der Einsatzplan mehr, als die
+     * Terminierung fuer diese Person vorgesehen hat.
+     */
+    const productivity = Number(day?.productivity ?? 1) || 1;
+    const anwesend = people.filter((p) => personPresent(p, date));
+    for (const p of people) {
+      if (!personPresent(p, date)) byPerson[p.id].absentDays += 1;
+    }
+
+    /** Schicht je Person in DIESER Woche - innerhalb der Woche unveraendert */
+    const schichtVon = schichtplan.zuordnung[weekKey(date)] ?? {};
+    /** @type {Record<string, number>} Restbudget je Person */
+    const rest = {};
+    for (const p of anwesend) {
+      rest[p.id] = round2(personEffectiveFactor(config, p, date) * hoursPerEmployee * productivity);
+    }
+    /** Welche Arbeitsgaenge macht eine Person heute schon? */
+    const heuteAn = {};
+    /** Welche Personen stehen heute an einem Arbeitsgang? (Plaetze zaehlen) */
+    const personenAn = {};
+
+    // Arbeit des Tages je Arbeitsgang zusammenfassen - ein Arbeitsgang mit
+    // drei Auftraegen ist drei Positionen, aber dieselben Plaetze.
+    const proOp = new Map();
+    for (const a of list) {
+      const e = proOp.get(a.opId) ?? { opId: a.opId, manHours: 0, posten: [] };
+      e.manHours = round2(e.manHours + a.manHours);
+      e.posten.push(a);
+      proOp.set(a.opId, e);
+    }
+
+    // Knappste Qualifikation zuerst
+    const sorted = [...proOp.values()].sort((a, b) => {
+      const qa = anwesend.filter((p) => p.skills?.[a.opId]).length;
+      const qb = anwesend.filter((p) => p.skills?.[b.opId]).length;
+      if (qa !== qb) return qa - qb;
+      return b.manHours - a.manHours;
+    });
+
+    /** @type {any[]} */
+    const eintraege = [];
+    for (const op of sorted) {
+      const plaetzeJeSchicht = plaetzeAm(config, op.opId, day);
+      /* So viele Schichten laeuft dieser Arbeitsgang */
+      const opSchichten = Math.max(1, Math.floor(schichtenJeOp[op.opId] ?? 1));
+      for (const a of op.posten.sort((x, y) => y.manHours - x.manHours)) {
+        let restStunden = a.manHours;
+        const besetzt = (schluessel) => (personenAn[schluessel] ??= new Set());
+        while (restStunden > 0.01) {
+          /*
+           * Die Schicht mit den meisten freien Leuten zuerst. Die
+           * Platzgrenze gilt JE SCHICHT - fuenf Leute an einer Saege sind
+           * auch in der Spaetschicht nicht moeglich.
+           *
+           * Ablösung bleibt erlaubt: Geht jemandem der Tag aus, uebernimmt
+           * ein anderer denselben Platz in derselben Schicht. Ohne das
+           * blieben 20 h Saegen ohne Namen - die Saege laeuft 7 h, die
+           * eingeteilte Person hatte aber nur noch 3 h.
+           */
+          let beste = null;
+          for (let sn = 1; sn <= opSchichten; sn++) {
+            const drauf = besetzt(`${a.opId}#${sn}`);
+            const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
+            const frei = anwesend.filter((p) => p.skills?.[a.opId] && rest[p.id] > 0.01
+              && (schichtVon[p.id] ?? 1) === sn
+              && (drauf.has(p.id) || belegt < plaetzeJeSchicht));
+            if (frei.length === 0) continue;
+            if (beste === null || frei.length > beste.frei.length) beste = { sn, drauf, frei };
+          }
+          if (beste === null) break;
+          const drauf = beste.drauf;
+          const koennen = beste.frei;
+          /*
+           * Auswahl nach AUSLASTUNG, nicht nach absoluten Stunden: Stunden
+           * geteilt durch Zeitanteil. Sonst bekaeme eine Halbtagskraft
+           * genauso viele Stunden wie eine Vollzeitkraft - im ersten
+           * Entwurf stand der Vorarbeiter mit 0,5 FTE bei denselben 442 h
+           * wie alle anderen.
+           */
+          koennen.sort((x, y) => {
+            const lx = byPerson[x.id].hours / Math.max(0.1, byPerson[x.id].factor);
+            const ly = byPerson[y.id].hours / Math.max(0.1, byPerson[y.id].factor);
+            if (Math.abs(lx - ly) > 0.01) return lx - ly;
+            // Bei Gleichstand: lieber weiterarbeiten als den Platz wechseln
+            const wx = drauf.has(x.id) ? 0 : (heuteAn[x.id] ? 2 : 1);
+            const wy = drauf.has(y.id) ? 0 : (heuteAn[y.id] ? 2 : 1);
+            if (wx !== wy) return wx - wy;
+            return x.id < y.id ? -1 : 1;
+          });
+          const p = koennen[0];
+          const nimm = round2(Math.min(rest[p.id], restStunden));
+          if (nimm <= 0.01) break;
+          drauf.add(p.id);
+          (heuteAn[p.id] ??= []).push(a.opId);
+          rest[p.id] = round2(rest[p.id] - nimm);
+          restStunden = round2(restStunden - nimm);
+          eintraege.push({
+            personId: p.id, opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
+            projectId: a.projectId,
+            orderNo: projectName.get(a.projectId) ?? a.projectId,
+            hours: nimm,
+            /** In welcher Schicht - 1 = frueh */
+            schicht: beste.sn,
+          });
+          const bp = byPerson[p.id];
+          bp.hours = round2(bp.hours + nimm);
+          bp.byOp[a.opId] = round2((bp.byOp[a.opId] ?? 0) + nimm);
+          const wk = weekKey(date);
+          bp.byWeek[wk] = round2((bp.byWeek[wk] ?? 0) + nimm);
+        }
+        if (restStunden > 0.01) {
+          offen = round2(offen + restStunden);
+          unbesetzteSchichten[a.opId] = round2((unbesetzteSchichten[a.opId] ?? 0) + restStunden);
+          eintraege.push({
+            personId: null, opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
+            projectId: a.projectId,
+            orderNo: projectName.get(a.projectId) ?? a.projectId,
+            hours: round2(restStunden),
+            schicht: null,
+          });
+        }
+      }
+    }
+
+    /*
+     * Wer anwesend ist und nichts bekommt, braucht einen GRUND. Genau das
+     * war die Rueckfrage ("MAAP wird an manchen Tagen gar nicht geplant,
+     * obwohl anwesend"): Ohne Grund sieht es nach einem Fehler aus, auch
+     * wenn schlicht kein Platz frei war.
+     */
+    const ohneArbeit = [];
+    for (const p of anwesend) {
+      if (heuteAn[p.id]?.length) continue;
+      const konnte = [...proOp.values()].filter((op) => p.skills?.[op.opId]);
+      const meineSchicht = schichtVon[p.id] ?? 1;
+      /* Laeuft ueberhaupt ein Arbeitsgang in MEINER Schicht, den ich darf? */
+      const inMeinerSchicht = konnte.filter(
+        (op) => Math.max(1, Math.floor(schichtenJeOp[op.opId] ?? 1)) >= meineSchicht);
+      const grund = proOp.size === 0
+        ? 'KEINE_ARBEIT'
+        : konnte.length === 0
+          ? 'KEINE_QUALIFIKATION'
+          : inMeinerSchicht.length === 0
+            ? 'SCHICHT_OHNE_ARBEIT'
+            : 'KEIN_PLATZ_FREI';
+      ohneArbeit.push({
+        id: p.id,
+        grund,
+        schicht: meineSchicht,
+        arbeitsgaenge: konnte.map((op) => op.opId),
+        stunden: round2(rest[p.id] ?? 0),
+      });
+      byPerson[p.id].idleDays = (byPerson[p.id].idleDays ?? 0) + 1;
+      byPerson[p.id].idleReasons = byPerson[p.id].idleReasons ?? {};
+      byPerson[p.id].idleReasons[grund] = (byPerson[p.id].idleReasons[grund] ?? 0) + 1;
+    }
+
+    tage.push({
+      date,
+      weekKey: weekKey(date),
+      hoursPerEmployee: round2(hoursPerEmployee),
+      entries: eintraege,
+      /** Anwesend, aber ohne Arbeit - mit Grund */
+      idle: ohneArbeit,
+      /** Schicht je Person in dieser Woche (wochenweise, nie tageweise) */
+      schichten: schichtVon,
+      absent: people.filter((p) => !personPresent(p, date)).map((p) => ({ id: p.id, kind: absenceOn(p, date)?.kind ?? '' })),
+    });
+  }
+
+  return {
+    days: tage,
+    people: Object.values(byPerson),
+    /** Stunden, fuer die es niemanden in der Mannschaft gibt */
+    unassignedHours: round2(offen),
+    /** Schichten je Arbeitsgang und die wochenweise Zuordnung */
+    schichtplan: {
+      maxSchichten: schichtplan.maxSchichten,
+      jeArbeitsgang: schichtenJeOp,
+      jeWoche: schichtplan.zuordnung,
+      schichtStunden: SCHICHT_STUNDEN,
+    },
+    /** Stunden, die eine Schicht nicht besetzen konnte - je Arbeitsgang */
+    unbesetzteSchichten,
+  };
+}
+
+/**
+ * Wie viele Personen koennen an diesem Arbeitsgang heute gleichzeitig
+ * arbeiten? Ein Platz, eine Person - beim Orbitalschweissen begrenzen die
+ * Maschinen ueber "Maschinen je Schweisser" die Zahl der Schweisser.
+ * @param {any} config @param {string} opId @param {any} day Tagesreihe
+ */
+function plaetzeAm(config, opId, day) {
+  if (opId === 'ORBITAL') {
+    // Die Maschinen begrenzen die Schweisser: ein Schweisser bedient
+    // mehrere Maschinen, mehr Schweisser bringen also nichts.
+    const nutzbar = Number(day?.resources?.orbitalMachinesUsable
+      ?? placesFor(config, 'ORBITAL') ?? 0);
+    const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));
+    return Math.max(1, Math.ceil(nutzbar / jeSchweisser));
+  }
+  const plaetze = placesFor(config, opId);
+  /*
+   * Ohne Platzgrenze begrenzt nur die Mannschaft. Und: An einem Platz
+   * koennen mehrere arbeiten - bei Vormontage und Endkontrolle sind es
+   * zwei (workersPerPlace). Das fehlte im ersten Entwurf, dadurch blieben
+   * 113 h Endkontrolle ohne Namen, obwohl Leute frei waren.
+   */
+  if (plaetze == null || !Number.isFinite(Number(plaetze))) return Number.MAX_SAFE_INTEGER;
+  const jePlatz = Math.max(1, Number(workersPerPlace(config, opId) ?? 1));
+  return Math.max(1, Math.floor(Number(plaetze) * jePlatz));
+}
+
+/**
+ * Wochenplan einer Person: je Tag, welcher Auftrag und welcher Arbeitsgang.
+ * @param {any} plan Ergebnis von assignPeople
+ * @param {string} personId
+ * @param {string} wk Kalenderwoche, z. B. '2026-W38'
+ */
+export function personWeek(plan, personId, wk) {
+  const tage = plan.days.filter((d) => d.weekKey === wk);
+  return tage.map((d) => ({
+    date: d.date,
+    absent: d.absent.find((a) => a.id === personId) ?? null,
+    entries: d.entries
+      .filter((e) => e.personId === personId)
+      .map((e) => ({ ...e, opName: OPERATION_BY_ID[e.opId]?.name ?? e.opId })),
+    hours: round2(d.entries.filter((e) => e.personId === personId).reduce((a, e) => a + e.hours, 0)),
+  }));
+}

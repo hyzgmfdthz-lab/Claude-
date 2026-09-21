@@ -1,0 +1,20 @@
+{
+  "name": "megc-armaturenbau-planner",
+  "version": "1.0.0",
+  "description": "Produktionsplanungs-, Kapazitaets- und Szenariosimulationstool fuer den Armaturenbau (MEGC) bei Hexagon Purus",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test engine/test/*.test.js browser/test/*.test.js",
+    "test:all": "node --test --test-concurrency=1 engine/test/*.test.js browser/test/*.test.js server/test/*.test.js",
+    "typecheck": "npx -y -p typescript@5.6.3 tsc --noEmit -p jsconfig.json",
+    "build:html": "node tools/build-html.mjs",
+    "lint": "npx -y eslint@10.1.0 --no-config-lookup -c tools/eslint.config.mjs engine server browser web/js tools",
+    "pruefen": "bash tools/vollpruefung.sh"
+  },
+  "dependencies": {}
+}
