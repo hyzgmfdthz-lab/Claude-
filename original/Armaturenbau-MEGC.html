@@ -23831,7 +23831,7 @@ __defs["engine/schichtplan.js"] = function (__exports, __req) {
  */
 
 const { OPERATIONS, OPERATION_BY_ID, round1, round2 } = __req("engine/model.js");
-const { placesFor, workersPerPlace } = __req("engine/capacity.js");
+const { placesFor, workersPerPlace, schichtBesetzungVon } = __req("engine/capacity.js");
 const { shiftCapability, pinnedOpOf } = __req("engine/team.js");
 const { blockedByOperation } = __req("engine/kpi.js");
 /*
@@ -23927,6 +23927,31 @@ function schichtenJeArbeitsgang(config) {
   /** @type {Record<string, number>} */
   const out = {};
   for (const op of OPERATIONS) {
+    /*
+     * FIX (gemeldet 21.09.2026 anhand eines Live-Standes, 558 h ohne
+     * Namen bei aktivem Mehrschichtbetrieb): Diese Funktion leitete die
+     * Schichtzahl bisher AUSSCHLIESSLICH aus dem Betriebsfenster
+     * (operatingHours) ab - unabhaengig von einer ausdruecklich
+     * hinterlegten Schichtbesetzung (`schichtBesetzung`, z. B. [1,1] fuer
+     * zwei Schichten mit je einem Platz).
+     *
+     * engine/capacity.js (platzStundenAm, tatsaechliche Kapazitaetsrechnung
+     * der Terminierung) nimmt bei hinterlegter Schichtbesetzung IMMER
+     * deren Laenge als Schichtzahl - unabhaengig vom Betriebsfenster. Die
+     * Einsatzplanung/Schichtzuordnung rechnete bisher mit einer ANDEREN,
+     * eigenstaendig aus dem Betriebsfenster abgeleiteten Schichtzahl.
+     * Beispiel: 14 h Betriebsfenster ergibt schichtenAus(14) = 1,87 -
+     * abgerundet auf 1 Schicht in der Vergabeschleife von
+     * engine/assignment.js. Mit `schichtBesetzung:[1,1]` gewaehrt die
+     * Terminierung aber 2 Schichten Platzkapazitaet. Die zweite Schicht
+     * hatte dadurch nie eine Chance auf einen Namen - nicht weil die
+     * Mannschaft fehlte, sondern weil zwei Module unterschiedlich
+     * zaehlten. Jetzt gilt: eine ausdruecklich hinterlegte
+     * Schichtbesetzung ist die massgebliche Quelle, das Betriebsfenster
+     * bleibt nur der Rueckfall ohne eine solche Angabe.
+     */
+    const besetzung = schichtBesetzungVon(config, op.id);
+    if (besetzung) { out[op.id] = besetzung.length; continue; }
     const eigen = res.byOperation?.[op.id]?.operatingHours;
     out[op.id] = schichtenAus(eigen ?? allgemein);
   }
@@ -25422,6 +25447,17 @@ function assignPeople(result, config, range = {}) {
   const schichtplan = wochenSchichten(config, wochenListe, eingeplantePersonen, lastJeWoche);
   /** Stunden, die eine Schicht nicht besetzen konnte - je Arbeitsgang */
   const unbesetzteSchichten = {};
+  /**
+   * Luecken-Report (Nutzeranforderung 21.09.2026): fuer jede von der
+   * Terminierung als ausfuehrbar eingestufte, aber hier nicht besetzbare
+   * Stunde der konkrete, nachpruefbare Ablehnungsgrund - Qualifikation,
+   * Bindung, persoenliches Budget, Schicht oder Platzgrenze. Nicht
+   * "Schicht ohne Arbeit"/"Arbeit verteilt" als Sammelbegriff, sondern:
+   * welche Bedingung genau hat gefehlt, und wer waere sonst infrage
+   * gekommen.
+   * @type {any[]}
+   */
+  const luecken = [];
 
   for (const date of arbeitstage) {
     const list = alloc.get(date) ?? [];
@@ -25591,6 +25627,64 @@ function assignPeople(result, config, range = {}) {
             hours: round2(restStunden),
             schicht: null,
           });
+          /*
+           * Diagnose je Schicht: dieselben fuenf Bedingungen, die die
+           * Vergabe-Schleife oben schon prueft (Qualifikation, Bindung,
+           * Budget, Schicht, Platz) - hier nur nicht als Filter, sondern
+           * als Befund. Material/Vorgaenger tauchen hier nie auf: waeren
+           * sie die Ursache, haette die Terminierung diese Stunde gar
+           * nicht erst als ausfuehrbar eingestuft.
+           */
+          const opSchichtenHeute = Math.max(1, Math.floor(schichtenJeOp[a.opId] ?? 1));
+          const jeSchicht = [];
+          for (let sn = 1; sn <= opSchichtenHeute; sn++) {
+            const inDerSchicht = anwesend.filter((p) => (schichtVon[p.id] ?? 1) === sn);
+            const qualifiziert = inDerSchicht.filter((p) => kannArbeitsgang(config, p, a.opId));
+            const ungebunden = qualifiziert.filter((p) => gebundenAn(p.id) == null || gebundenAn(p.id) === a.opId);
+            const mitBudget = ungebunden.filter((p) => (rest[p.id] ?? 0) > 0.01);
+            const schluessel = `${a.opId}#${sn}`;
+            const platzGrenze = plaetzeJeSchicht;
+            const platzBelegt = [...(personenAn[schluessel] ?? [])].filter((id) => (rest[id] ?? 0) > 0.01).length;
+            jeSchicht.push({
+              schicht: sn,
+              anwesendInSchicht: inDerSchicht.length,
+              qualifiziert: qualifiziert.length,
+              qualifiziertUngebunden: ungebunden.length,
+              qualifiziertMitBudget: mitBudget.map((p) => ({ id: p.id, restBudget: rest[p.id] })),
+              platzGrenze,
+              platzBelegt,
+              grund: qualifiziert.length === 0
+                ? 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT'
+                : ungebunden.length === 0
+                  ? 'ALLE_QUALIFIZIERTEN_FEST_ANDERS_GEBUNDEN'
+                  : mitBudget.length === 0
+                    ? 'BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT'
+                    : 'PLATZGRENZE_DER_SCHICHT_ERREICHT',
+            });
+          }
+          /*
+           * Der klarste, umsetzbare Befund: gab es in IRGENDEINER passenden
+           * Schicht eine qualifizierte, ungebundene Person mit Restbudget,
+           * die nur an der Platzgrenze scheiterte? Dann ist das eine
+           * echte Platzfrage (ein weiterer Platz/eine weitere Schicht
+           * haette geholfen). Sonst fehlte die Person selbst.
+           */
+          const hauptgrund = jeSchicht.some((s) => s.grund === 'PLATZGRENZE_DER_SCHICHT_ERREICHT')
+            ? 'PLATZGRENZE_DER_SCHICHT_ERREICHT'
+            : jeSchicht.every((s) => s.grund === 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT')
+              ? 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT'
+              : jeSchicht.every((s) => s.grund === 'BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT'
+                || s.grund === 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT')
+                ? 'BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT'
+                : 'ALLE_QUALIFIZIERTEN_FEST_ANDERS_GEBUNDEN';
+          luecken.push({
+            date, weekKey: weekKey(date),
+            projectId: a.projectId, orderNo: projectName.get(a.projectId) ?? a.projectId,
+            opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
+            stunden: round2(restStunden),
+            hauptgrund,
+            jeSchicht,
+          });
         }
       }
     }
@@ -25691,6 +25785,19 @@ function assignPeople(result, config, range = {}) {
     });
   }
 
+  /** Gesamtstunden je Ablehnungsgrund - schneller Ueberblick vor den Einzelfaellen */
+  const lueckenJeGrund = {};
+  for (const l of luecken) lueckenJeGrund[l.hauptgrund] = round2((lueckenJeGrund[l.hauptgrund] ?? 0) + l.stunden);
+  /** Fehlende Besetzung je KW und Arbeitsgang (Nutzeranforderung: "je KW, Schicht und Arbeitsgang") */
+  const lueckenJeWocheUndOpMap = {};
+  for (const l of luecken) {
+    const schluessel = `${l.weekKey}|${l.opId}`;
+    const e = (lueckenJeWocheUndOpMap[schluessel] ??= {
+      weekKey: l.weekKey, opId: l.opId, opName: l.opName, stunden: 0,
+    });
+    e.stunden = round2(e.stunden + l.stunden);
+  }
+
   return {
     days: tage,
     people: Object.values(byPerson),
@@ -25708,6 +25815,16 @@ function assignPeople(result, config, range = {}) {
     },
     /** Stunden, die eine Schicht nicht besetzen konnte - je Arbeitsgang */
     unbesetzteSchichten,
+    /**
+     * Luecken-Report: ungedeckter Bedarf mit konkretem, nachpruefbarem
+     * Ablehnungsgrund je Stunde (siehe Kommentar bei der Deklaration von
+     * `luecken` oben). Ersetzt keine Kapazitaetsrechnung - zeigt nur,
+     * woran eine von der Terminierung als ausfuehrbar eingestufte Stunde
+     * in der Einsatzplanung tatsaechlich gescheitert ist.
+     */
+    luecken,
+    lueckenJeGrund,
+    lueckenJeWocheUndOp: Object.values(lueckenJeWocheUndOpMap),
   };
 }
 
