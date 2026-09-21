@@ -7683,8 +7683,49 @@ function wochenPlan(a, plan, neu) {
     h('span', 'nur Eingeplante zeigen'));
   kopf.append(umschalter);
 
-  return h('div', kopf, table(spalten, zeilen, { compact: true }), fuss);
+  return h('div', kopf, table(spalten, zeilen, { compact: true }), fuss, lueckenBericht(plan, wk));
 }
+
+/**
+ * Luecken-Report (Nutzeranforderung 25.09.2026: "welcher Arbeit ist aus
+ * welchem Grund nicht freigegeben?"): jede Stunde, die die Terminierung
+ * heute als ausfuehrbar eingestuft hat, aber die Einsatzplanung niemandem
+ * zuteilen konnte - mit Auftrag, Arbeitsgang und nachpruefbarem Grund.
+ * Ersetzt nicht die Ursachenanalyse je Auftrag (Aufträge → Zeile
+ * anklicken) - die erklärt, warum ein Auftrag insgesamt zu spät ist,
+ * dieser Bericht erklärt eine einzelne unbesetzte Stunde am Tag.
+ */
+function lueckenBericht(plan, wk) {
+  const zeilen = (plan.luecken ?? []).filter((l) => l.weekKey === wk)
+    .sort((a, b) => b.stunden - a.stunden);
+  if (zeilen.length === 0) return null;
+  const summe = zeilen.reduce((a, l) => a + l.stunden, 0);
+  return card(`Nicht besetzbare Stunden dieser Woche (${fmt.h(summe)})`, table([
+    { key: 'date', label: 'Tag', render: (l) => fmt.dateShort(l.date) },
+    { key: 'orderNo', label: 'Auftrag' },
+    { key: 'opName', label: 'Arbeitsgang' },
+    { key: 'stunden', label: 'Stunden', num: true, render: (l) => fmt.h(l.stunden) },
+    {
+      key: 'hauptgrund',
+      label: 'Grund',
+      render: (l) => h('span', {
+        title: (l.jeSchicht ?? []).map((s) => `Schicht ${s.schicht}: ${s.anwesendInSchicht} anwesend, `
+          + `${s.qualifiziert} qualifiziert, ${s.qualifiziertMitBudget.length} mit Restbudget, `
+          + `Platzgrenze ${s.platzGrenze}, belegt ${s.platzBelegt}`).join('\n'),
+      }, LUECKEN_GRUND[l.hauptgrund]?.text ?? l.hauptgrund),
+    },
+  ], zeilen, { compact: true }), {
+    sub: 'Von der Terminierung freigegebene Arbeit, für die heute niemand passte - mit dem genauen Grund je Zeile.',
+    flush: true,
+  });
+}
+
+/** Grund je Lücke - Klartext statt Code. */
+const LUECKEN_GRUND = {
+  KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT: { text: 'keine Qualifizierte in der Schicht' },
+  BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT: { text: 'Qualifizierte schon anderweitig verplant' },
+  PLATZGRENZE_DER_SCHICHT_ERREICHT: { text: 'Platzgrenze erreicht' },
+};
 
 /**
  * Text fuer "Arbeit des Tages ist vergeben" - nennt die TATSAECHLICHE
@@ -10932,6 +10973,16 @@ function createApi(store, options = {}) {
         people: plan.people,
         unassignedHours: plan.unassignedHours,
         days: plan.days,
+        schichtplan: plan.schichtplan,
+        unbesetzteSchichten: plan.unbesetzteSchichten,
+        /**
+         * Luecken-Report (Nutzeranforderung 25.09.2026: "welcher Arbeit ist
+         * aus welchem Grund nicht freigegeben?") - kam bisher gar nicht
+         * beim Client an, obwohl engine/assignment.js es schon lieferte.
+         */
+        luecken: plan.luecken,
+        lueckenJeGrund: plan.lueckenJeGrund,
+        lueckenJeWocheUndOp: plan.lueckenJeWocheUndOp,
       };
     },
 
@@ -14910,8 +14961,25 @@ function defaultPlaces() {
      * Endkontrolle eine Möglichkeit" - ohne maxPlaces war ein
      * zusaetzlicher Platz als Massnahme gar nicht waehlbar
      * (patchPlatz in engine/mehraufwand.js braucht maxPlaces>0).
+     *
+     * Aushilfe (Nutzeranforderung 25.09.2026, ausdruecklich bestaetigt):
+     * "wie Hydro" - ein Helfer bereitet vor und arbeitet dem Pruefer zu.
+     * ACHTUNG: anders als bei Hydro/Entgraten liegen hierfuer noch KEINE
+     * von der Abteilung bestaetigten Werte vor - leistung/stundenfaktor
+     * sind vorlaeufig 1:1 von Hydro uebernommen (validated: false) und
+     * muessen noch bestaetigt werden.
      */
-    ENDKONTROLLE: { places: 2, maxPlaces: 3, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – dritter Platz als Maßnahme möglich' },
+    ENDKONTROLLE: {
+      places: 2, maxPlaces: 3, workersPerPlace: 1,
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 1, validated: false,
+        label: 'dem Prüfer zuarbeiten',
+        text: 'Ein Mitarbeiter bereitet vor und arbeitet dem Prüfer zu (Werte vorläufig von der '
+          + 'Hydroprüfung übernommen, noch zu bestätigen).',
+      },
+      note: 'zwei Plätze, je eine Person – dritter Platz als Maßnahme möglich, im Engpass kann ein '
+        + 'Helfer zuarbeiten (Werte zu validieren)',
+    },
     REINIGEN: { places: 1, workersPerPlace: 1 },
   };
 }
