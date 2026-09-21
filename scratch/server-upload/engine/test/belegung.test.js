@@ -201,3 +201,37 @@ test('Mehr Kapazität verringert den Überhang', () => {
   const viel = deadlineShortfall(bau(10)).hours;
   assert.ok(viel < wenig, `mehr Personal = weniger Überhang (${wenig} -> ${viel})`);
 });
+
+test('Über Kapazität hält sich an den gewählten Zeitraum', () => {
+  /*
+   * FIX (gemeldet 21.09.2026 anhand eines Bildschirmfotos): "+1.932 h über
+   * Kapazität" in der Kopfzeile änderte sich nicht, wenn im Feld "Zeitraum"
+   * ein kürzeres Ende gewählt wurde - deadlineShortfall() suchte den
+   * größten Fehlbetrag über ALLE Termine, auch weit hinter dem gewählten
+   * Zeitraum. Ein Termin, der außerhalb des gewählten Fensters liegt, darf
+   * dessen Kennzahl nicht mehr bestimmen.
+   */
+  const { result } = run({
+    config: testConfig({ workforce: { baseHeadcount: 2 } }),
+    templates: {
+      NEUBAU_FT40: template('NEUBAU_FT40', 'Test', { SAEGEN: 300 }),
+      NEUBAU_FT20: template('NEUBAU_FT20', 'Klein', { SAEGEN: 20 }),
+    },
+    projects: [
+      createProject({
+        id: 'FRUEH', orderNo: 'FRUEH', projectType: 'NEUBAU', variant: 'FT20',
+        dueDate: '2026-09-25', priority: 'P1', sequence: 10,
+      }),
+      createProject({
+        id: 'SPAET', orderNo: 'SPAET', projectType: 'NEUBAU', variant: 'FT40',
+        dueDate: '2027-02-26', priority: 'P3', sequence: 20,
+      }),
+    ],
+  });
+  const ohneFenster = deadlineShortfall(result);
+  const mitFenster = deadlineShortfall(result, '2026-10-31');
+  assert.ok(ohneFenster.untilDate > '2026-10-31',
+    `der größte Fehlbetrag liegt ohne Fenster beim späten Termin (${ohneFenster.untilDate})`);
+  assert.ok(mitFenster.untilDate === null || mitFenster.untilDate <= '2026-10-31',
+    `mit Fenster darf kein Termin nach dem Fensterende genannt werden (${mitFenster.untilDate})`);
+});

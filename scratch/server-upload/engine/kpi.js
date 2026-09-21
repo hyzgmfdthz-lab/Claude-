@@ -337,12 +337,28 @@ export function missingQualification(result, config) {
  * Heftplaetze). Dafuer steht die Kennzahl "Engste Stelle" daneben.
  *
  * @param {any} result Ergebnis von runSchedule
+ * @param {string|null} [windowEnd] Nur Termine bis zu diesem Datum werten -
+ *   ohne Angabe (z.B. in den bestehenden Tests) wie bisher der ganze
+ *   Auftragsbestand.
  */
-export function deadlineShortfall(result) {
+export function deadlineShortfall(result, windowEnd = null) {
+  /*
+   * FIX (gemeldet 21.09.2026 anhand eines Bildschirmfotos): "+1.932 h ueber
+   * Kapazitaet" in der Kopfzeile blieb gleich, egal welchen Zeitraum man im
+   * Feld "Zeitraum" auswaehlte - z.B. "heute - 31.12.2026". Der Grund: die
+   * Funktion suchte den groessten Fehlbetrag ueber ALLE Auftraege mit
+   * offenem Termin, auch wenn deren Termin weit hinter dem gewaehlten
+   * Zeitraum lag (bis in den Rechenhorizont 2027 hinein). Damit widersprach
+   * die Kopfzeile der eigenen Vorgabe der Abteilungsleitung (18.09.2026):
+   * "Die APP soll immer nur den angewaehlten Zeitraum bewerten" - die
+   * anderen Kennzahlen (verfuegbare Stunden, Auslastung, WIP-Ausnahmen)
+   * wurden dafuer bereits umgestellt, dieser Wert wurde dabei uebersehen.
+   */
   // `remainingManHours` eines Ergebnisses sind die zum Planungsstichtag
   // OFFENEN Stunden (nicht der Rest nach der Rechnung) - genau der Bedarf.
   const offen = result.projects
     .filter((p) => p.dueDate && p.remainingManHours > 0)
+    .filter((p) => !windowEnd || cmpDate(p.dueDate, windowEnd) <= 0)
     .map((p) => ({
       id: p.id,
       orderNo: p.orderNo,
@@ -497,7 +513,7 @@ export function dashboardKpis(result, weeks, range = {}) {
    */
   const orbital = processUtilization(result, 'ORBITAL', windowEnd, windowStart);
   const heft = processUtilization(result, 'HEFTEN', windowEnd, windowStart);
-  const shortfall = deadlineShortfall(result);
+  const shortfall = deadlineShortfall(result, windowEnd);
 
   /*
    * FIX (gefunden 21.09.2026 beim Nachweis der Regler-Wirkung): die

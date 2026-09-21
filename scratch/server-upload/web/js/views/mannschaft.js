@@ -376,9 +376,15 @@ async function ladeMannschaft(a, container) {
      * anderen Reiter wechselte. Jetzt steht die Wirkung dort, wo der Haken
      * gesetzt wird: Stunden je Person und die Tage, an denen sie wegen
      * fehlender Qualifikation leer ausgeht.
+     *
+     * FIX (Nutzerauftrag 21.09.2026, "alle Eingabefelder müssen greifen"):
+     * der gewählte Zeitraum aus der Kopfzeile wurde hier nicht mitgegeben -
+     * der Einsatzplan rechnete immer bis zum letzten Termin, unabhängig
+     * davon, was im Feld "Zeitraum" stand. Betraf alle drei Stellen, die
+     * api.assignment() aufrufen (hier, Einsatzplan-Reiter, Aushang).
      */
     let plan = null;
-    try { plan = await api.assignment(a.scenarioId); } catch { plan = null; }
+    try { plan = await api.assignment(a.scenarioId, a.ui.range); } catch { plan = null; }
     const imPlan = new Map((plan?.people ?? []).map((x) => [x.id, x]));
     const spalten = [
       {
@@ -821,7 +827,7 @@ function einsatzplan(a) {
 
 async function ladeEinsatz(a, container) {
   try {
-    const plan = await api.assignment(a.scenarioId);
+    const plan = await api.assignment(a.scenarioId, a.ui.range);
     if (!plan || plan.days.length === 0) {
       container.replaceChildren(h('div.empty', 'Kein Einsatzplan – es ist keine Mannschaft gepflegt.'));
       return;
@@ -1423,7 +1429,7 @@ function aushang(a) {
 
 async function ladeAushang(a, ziel) {
   try {
-    const plan = await api.assignment(a.scenarioId);
+    const plan = await api.assignment(a.scenarioId, a.ui.range);
     if (!plan || plan.days.length === 0) {
       ziel.replaceChildren(h('div.empty', 'Kein Einsatzplan – es ist keine Mannschaft gepflegt.'));
       return;
