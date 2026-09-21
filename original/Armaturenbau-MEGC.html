@@ -15220,8 +15220,8 @@ function analyze(dataset, scenarioId, range = {}) {
     processBalance: processBalance(result, demand, from, to),
     /** Rechenweg der Kapazitaet - welcher Zeitraum, welche Bestandteile */
     capacityDerivation: capacityDerivation(input.config, result.daySeries, to, from),
-    processUtilization: OPERATIONS.map((o) => processUtilization(result, o.id, to)),
-    orbital: orbitalReport(result, to),
+    processUtilization: OPERATIONS.map((o) => processUtilization(result, o.id, to, from)),
+    orbital: orbitalReport(result, to, from),
     rootCauses: causes,
     bottleneckByOperation: bottleneckByOperation(result),
     validation: { issues, summary: validationSummary(issues) },
@@ -19708,8 +19708,14 @@ function dashboardKpis(result, weeks, range = {}) {
   const hoursPerEmployeeWeek = (result.config.workTime?.regularHoursPerWeek ?? 37.5) * prod;
   const requiredFteWeeks = hoursPerEmployeeWeek > 0 ? round1(overloadHours / hoursPerEmployeeWeek) : 0;
 
-  const orbital = processUtilization(result, 'ORBITAL', lastRelevant);
-  const heft = processUtilization(result, 'HEFTEN', lastRelevant);
+  /*
+   * FIX Hoch08 (Audit 20.09.2026): dieselbe Fensterregel wie bei
+   * `availableHours` oben - der angewaehlte Zeitraum (`windowStart`/
+   * `windowEnd`), nicht `lastRelevant` (das Ende des ganzen
+   * Auftragsbestands, unabhaengig von der Auswahl).
+   */
+  const orbital = processUtilization(result, 'ORBITAL', windowEnd, windowStart);
+  const heft = processUtilization(result, 'HEFTEN', windowEnd, windowStart);
   const shortfall = deadlineShortfall(result);
 
   return {
@@ -19836,11 +19842,18 @@ function bottleneckRanking(result) {
  * Auslastung eines Arbeitsganges im relevanten Zeitfenster.
  * @param {any} result @param {string} opId @param {string|null} until
  */
-function processUtilization(result, opId, until) {
+function processUtilization(result, opId, until, from = null) {
   let cap = 0;
   let used = 0;
   let capDays = 0;
   for (const d of result.daySeries) {
+    /*
+     * FIX Hoch08 (Audit 20.09.2026): der angewaehlte Zeitraum hat auch eine
+     * UNTERGRENZE. Vorher lief diese Auswertung immer ab dem ersten Tag der
+     * Tagesreihe (Planungsstichtag) - eine Auswahl von nur einem einzelnen
+     * Tag zaehlte trotzdem alle Tage seit Planungsbeginn mit.
+     */
+    if (from && cmpDate(d.date, from) < 0) continue;
     if (until && cmpDate(d.date, until) > 0) break;
     const v = d.byOp[opId];
     if (!v) continue;
@@ -20138,7 +20151,7 @@ function blockedByOperation(result) {
  * Orbitalschweiss-Sonderauswertung (§54).
  * @param {any} result @param {string|null} until
  */
-function orbitalReport(result, until) {
+function orbitalReport(result, until, from = null) {
   const cfg = result.config;
   let machineHoursNeeded = 0;
   let machineHoursCap = 0;
@@ -20147,6 +20160,9 @@ function orbitalReport(result, until) {
   let days = 0;
   let usableSum = 0;
   for (const d of result.daySeries) {
+    /* FIX Hoch08 (Audit 20.09.2026): siehe processUtilization() - auch hier
+     * fehlte die Untergrenze des angewaehlten Zeitraums. */
+    if (from && cmpDate(d.date, from) < 0) continue;
     if (until && cmpDate(d.date, until) > 0) break;
     const v = d.byOp.ORBITAL;
     if (!v || d.poolCapacity <= 0) continue;
@@ -20543,6 +20559,42 @@ function validate(data) {
   const t = config.tacking ?? {};
   if (Number(t.minLeadHours) > Number(t.maxLeadHours)) {
     add(ERR, 'HEFTVORSPRUNG', 'Mindestvorsprung Heften ist größer als der Maximalvorsprung.');
+  }
+  /*
+   * FIX Hoch07 (Audit 20.09.2026): Widerspruch zwischen prozentualem
+   * Mindestvorsprung (Ueberlappungsregel je Arbeitsgang, z. B. "Orbital darf
+   * ab 15 % des Heftens starten") und dem absoluten Maximalvorsprung
+   * (`tacking.maxLeadHours`, gilt fuer Heften -> Orbital) nicht mehr still
+   * in einer Dauersperre enden lassen: Der Nachfolger braucht dann mehr
+   * Vorsprung, als der Vorgaenger ueberhaupt haben darf, und startet nie.
+   * Die Kombination wird je Projekt geprueft, weil der Mindestvorsprung in
+   * Stunden vom tatsaechlichen Arbeitsinhalt des Vorgaengers abhaengt (15 %
+   * von 80 h Heften sind 12 h - bei einem kleineren Auftrag waeren es
+   * weniger).
+   */
+  if (t.enforceMaxLead !== false && Number.isFinite(Number(t.maxLeadHours))) {
+    const maxLead = Number(t.maxLeadHours);
+    for (const p of projects) {
+      if (p.active === false) continue;
+      const routing = resolveRouting(p, templates, config);
+      for (const op of routing.ops) {
+        for (const pred of op.predecessors) {
+          if (pred.type !== 'OVERLAP' || !pred.limitLead || pred.leadPercent == null) continue;
+          const vorgaenger = routing.ops.find((o) => o.opId === pred.opId);
+          if (!vorgaenger || vorgaenger.totalUnits <= 0) continue;
+          const mindestVorsprung = (Number(pred.leadPercent) / 100) * vorgaenger.totalUnits;
+          if (mindestVorsprung > maxLead) {
+            const label = p.orderNo || p.name || p.id;
+            add(ERR, 'HEFTVORSPRUNG_WIDERSPRUCH',
+              `${label}: ${OPERATION_BY_ID[op.opId]?.name ?? op.opId} verlangt mindestens `
+              + `${mindestVorsprung.toFixed(1)} h Vorsprung von ${OPERATION_BY_ID[pred.opId]?.name ?? pred.opId} `
+              + `(${pred.leadPercent} % von ${vorgaenger.totalUnits} h), erlaubt sind aber höchstens ${maxLead} h. `
+              + 'Diese Kombination blockiert den Arbeitsgang dauerhaft.',
+              { projectId: p.id, field: 'leadPercent' });
+          }
+        }
+      }
+    }
   }
   if (Number(config.workforce?.newHires?.reduce?.((a, h) => a + Number(h.count || 0), 0) ?? 0) > Number(config.workforce?.maxNewHires ?? 5)) {
     add(WARN, 'NEUEINSTELLUNGEN', `Es sind mehr Neueinstellungen geplant als vorgesehen (max. ${config.workforce?.maxNewHires}).`);
@@ -27752,12 +27804,13 @@ function mehraufwand(input, result) {
 
   const spitze = wochen.reduce((a, b) => (b.luecke > a.luecke ? b : a), wochen[0]);
   const stunden = spitze.luecke;
+  const spitzeIndex = wochen.indexOf(spitze);
 
   // Ein Rechner fuer beide - jeder Kapazitaetsdurchgang wird nur einmal
   // gemacht, egal wie oft dieselbe Einstellung gebraucht wird.
   const rechner = gewinnRechner(config, wochen);
-  const massnahmen = alleMassnahmen(input, wochen, stunden, rechner);
-  const paket = schnuerePaket(input, wochen, stunden, massnahmen, rechner);
+  const massnahmen = alleMassnahmen(input, wochen, stunden, rechner, spitzeIndex);
+  const paket = schnuerePaket(input, wochen, stunden, massnahmen, rechner, spitzeIndex);
 
   return {
     stichtag,
@@ -28009,17 +28062,34 @@ function patchPlatz(opId) {
  *
  * @param {any} input @param {any[]} wochen @param {number} luecke
  */
-function alleMassnahmen(input, wochen, luecke, rechner) {
+function alleMassnahmen(input, wochen, luecke, rechner, spitzeIndex) {
   const config = input.config;
   const ab = naechsterMontag(wochen[0].von, config.planningDate);
   /** @type {any[]} */
   const out = [];
+
+  /*
+   * FIX Hoch06 (Audit 20.09.2026): "gedeckt" heisst RECHTZEITIG gedeckt.
+   *
+   * `rechner.gewinn(...)` summiert den Zusatzgewinn ueber den GANZEN
+   * Betrachtungszeitraum. Eine Massnahme, die erst NACH der Engpasswoche
+   * wirkt (z. B. Leiharbeiter ab naechstem Montag, waehrend die groesste
+   * Luecke schon diesen Freitag ist), zeigte trotzdem "reicht: true" - die
+   * Gesamtstunden passten, obwohl an der eigentlichen Faelligkeit nichts
+   * anders war. Deshalb hier zusaetzlich der kumulierte Gewinn NUR bis
+   * einschliesslich der Engpasswoche - das ist die Groesse, die "reicht"
+   * tatsaechlich beantworten muss.
+   */
+  const rechtzeitig = (schluessel, aendere) => round1(
+    rechner.gewinnJeWoche(schluessel, aendere).slice(0, spitzeIndex + 1).reduce((a, b) => a + b, 0),
+  );
 
   /* 1. Ueberstunden - guenstigster Weg, aber mit Grenze. */
   const ueberProStunde = rechner.gewinn('UE-1', patchUeberstunden(1, wochen));
   const noetig = ueberProStunde > 0 ? Math.ceil((luecke / ueberProStunde) * 2) / 2 : Infinity;
   const ueberWert = Math.min(UEBERSTUNDEN_GRENZE, Math.max(1, Number.isFinite(noetig) ? noetig : UEBERSTUNDEN_GRENZE));
   const ueberStunden = rechner.gewinn(`UE-${ueberWert}`, patchUeberstunden(ueberWert, wochen));
+  const ueberRechtzeitig = rechtzeitig(`UE-${ueberWert}`, patchUeberstunden(ueberWert, wochen));
   out.push({
     key: MASSNAHME.UEBERSTUNDEN,
     rang: 1,
@@ -28028,8 +28098,10 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
     einheit: 'h je MA und Woche',
     beschreibung: `${zahl(ueberWert)} h je Mitarbeiter und Woche, ${wochen.length} Wochen lang`,
     stunden: ueberStunden,
+    /** Davon bis einschliesslich der Engpasswoche wirksam (Fix Hoch06) */
+    rechtzeitigStunden: ueberRechtzeitig,
     kosten: kosten(config, ueberStunden, 'OVERTIME'),
-    reicht: ueberStunden >= luecke,
+    reicht: ueberRechtzeitig >= luecke,
     grenze: ueberWert >= UEBERSTUNDEN_GRENZE && ueberStunden < luecke
       ? `Mehr als ${UEBERSTUNDEN_GRENZE} h je Mitarbeiter und Woche sind nicht vorgesehen.`
       : null,
@@ -28065,6 +28137,7 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
   const leiheNoetig = proLeihe > 0 ? Math.min(leiheFrei, Math.ceil(luecke / proLeihe)) : leiheFrei;
   const leiheWert = Math.max(1, leiheNoetig);
   const leiheStunden = rechner.gewinn(`LE-${leiheWert}-${ab}`, patchLeihe(leiheWert, ab));
+  const leiheRechtzeitig = rechtzeitig(`LE-${leiheWert}-${ab}`, patchLeihe(leiheWert, ab));
   const leiheRechnungsstunden = abrechnungsStunden(config, wochen, ab, leiheWert);
   out.push({
     key: MASSNAHME.LEIHE,
@@ -28074,10 +28147,12 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
     einheit: leiheWert === 1 ? 'zusätzlich' : 'zusätzlich',
     beschreibung: `${leiheWert} Leiharbeiter zusätzlich ab ${formatDE(ab)}`,
     stunden: leiheStunden,
+    /** Davon bis einschliesslich der Engpasswoche wirksam (Fix Hoch06) */
+    rechtzeitigStunden: leiheRechtzeitig,
     /** Bezahlte Anwesenheitsstunden - Grundlage der Kostenrechnung (Fix Hoch05) */
     rechnungsstunden: leiheRechnungsstunden,
     kosten: kosten(config, leiheRechnungsstunden, 'TEMP'),
-    reicht: leiheStunden >= luecke,
+    reicht: leiheRechtzeitig >= luecke,
     grenze: leiheWert >= leiheFrei && leiheStunden < luecke
       ? `Mehr als ${leiheFrei} Leiharbeiterplätze sind nicht angelegt.`
       : null,
@@ -28091,6 +28166,7 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
   const samstagNoetig = proSamstag > 0 ? Math.min(wochen.length, Math.ceil(luecke / proSamstag)) : wochen.length;
   const samstagWert = Math.max(1, samstagNoetig);
   const samstagStunden = rechner.gewinn(`SA-${samstagWert}`, patchSamstag(samstagWert, wochen));
+  const samstagRechtzeitig = rechtzeitig(`SA-${samstagWert}`, patchSamstag(samstagWert, wochen));
   out.push({
     key: MASSNAHME.SAMSTAG,
     rang: 4,
@@ -28099,8 +28175,10 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
     einheit: samstagWert === 1 ? 'Samstag' : 'Samstage',
     beschreibung: `${samstagWert} Samstage mit ${Math.round(SAMSTAG_QUOTE * 100)} % der Mannschaft`,
     stunden: samstagStunden,
+    /** Davon bis einschliesslich der Engpasswoche wirksam (Fix Hoch06) */
+    rechtzeitigStunden: samstagRechtzeitig,
     kosten: kosten(config, samstagStunden, 'SATURDAY'),
-    reicht: samstagStunden >= luecke,
+    reicht: samstagRechtzeitig >= luecke,
     grenze: samstagWert >= wochen.length && samstagStunden < luecke
       ? `Mehr als ${wochen.length} Samstage hat der Zeitraum nicht.`
       : null,
@@ -28124,7 +28202,7 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
  *
  * @param {any} input @param {any[]} wochen @param {number} luecke @param {any[]} massnahmen
  */
-function schnuerePaket(input, wochen, luecke, massnahmen, rechner) {
+function schnuerePaket(input, wochen, luecke, massnahmen, rechner, spitzeIndex) {
   if (luecke <= 0) return null;
   const config = input.config;
   const ab = naechsterMontag(wochen[0].von, config.planningDate);
@@ -28197,12 +28275,35 @@ function schnuerePaket(input, wochen, luecke, massnahmen, rechner) {
 
   const stunden = round1(teile.reduce((a, t) => a + t.stunden, 0));
   const kostenSumme = round2(teile.reduce((a, t) => a + t.kosten, 0));
+
+  /*
+   * FIX Hoch06 (Audit 20.09.2026): dieselbe Verwechslung wie bei den
+   * Einzelmassnahmen, hier fuer das GESAMTPAKET. `stunden` (und damit
+   * `reicht`) zaehlt den Zusatzgewinn ueber den ganzen Zeitraum - nicht, ob
+   * an der Engpasswoche selbst genug zusammenkommt. Deshalb zusaetzlich je
+   * Teil der kumulierte Gewinn bis einschliesslich der Engpasswoche.
+   */
+  const patchVon = (t) => {
+    if (t.patch?.typ === MASSNAHME.UEBERSTUNDEN) return patchUeberstunden(t.patch.wert, wochen);
+    if (t.patch?.typ === MASSNAHME.LEIHE) return patchLeihe(t.patch.wert, t.patch.ab);
+    if (t.patch?.typ === MASSNAHME.SAMSTAG) return patchSamstag(t.patch.wert, wochen);
+    return null;
+  };
+  const rechtzeitigStunden = round1(teile.reduce((a, t) => {
+    const fn = patchVon(t);
+    if (!fn) return a;
+    const reihe = rechner.gewinnJeWoche(`PAKET-${t.key}-${JSON.stringify(t.patch)}`, fn);
+    return a + reihe.slice(0, spitzeIndex + 1).reduce((x, y) => x + y, 0);
+  }, 0));
+
   return {
     teile,
     stunden,
+    /** Davon bis einschliesslich der Engpasswoche wirksam (Fix Hoch06) */
+    rechtzeitigStunden,
     kosten: kostenSumme,
     deckung: luecke > 0 ? Math.round((stunden / luecke) * 100) : 100,
-    reicht: stunden >= luecke,
+    reicht: rechtzeitigStunden >= luecke,
     offen: round1(Math.max(0, offen)),
     text: teile.map((t) => t.text).join(' + '),
   };
