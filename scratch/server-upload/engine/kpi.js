@@ -3,7 +3,9 @@
  */
 
 import { OPERATIONS, OPERATION_BY_ID, PROJECT_STATUS, round1, round2 } from './model.js';
-import { LIMITER, LIMITER_LABEL, poolHoursFor } from './capacity.js';
+import {
+  LIMITER, LIMITER_LABEL, poolHoursFor, aushilfeVon,
+} from './capacity.js';
 import { cmpDate, weekKey, addDays } from './calendar.js';
 
 /**
@@ -152,11 +154,17 @@ export function workplaceLoad(result, workplaces, weeks) {
     const places = countFor(type, op.id);
     if (places <= 0) continue;
     const machineFactor = op.id === 'ORBITAL' ? perWelder : 1;
+    /*
+     * Aushilfe (Nutzeranforderung 25.09.2026) hebt die Platzgrenze bewusst
+     * an diesem Arbeitsgang - sonst schiene die Auslastung hier ueber
+     * 100 %, obwohl genau dafuer die Aushilfe gedacht ist.
+     */
+    const hilfe = aushilfeVon(cfg, op.id);
 
     const cells = weeks.map((w) => {
       const used = (w.byOp[op.id]?.usedUnits ?? 0) * machineFactor;
       const fenster = moeglich[op.id]?.[w.weekKey] ?? { hours: 0, days: 0 };
-      const capacity = places * fenster.hours;
+      const capacity = places * fenster.hours + (hilfe ? hilfe.max * hilfe.leistung * fenster.hours : 0);
       const blocked = blockiert[op.id]?.[w.weekKey];
       return {
         weekKey: w.weekKey,

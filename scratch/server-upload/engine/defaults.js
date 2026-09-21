@@ -231,12 +231,63 @@ export function defaultPlaces() {
      */
     AV: { places: 1, maxPlaces: 2, workersPerPlace: 1, note: 'ein Vorgang gleichzeitig – zu validieren' },
     SAEGEN: { places: 1, maxPlaces: 2, workersPerPlace: 1, note: 'ein Platz, ein zweiter ist bei Bedarf einrichtbar' },
-    ENTGRATEN: { places: 1, maxPlaces: 2, workersPerPlace: 1, note: 'ein Platz, eine Person – im Engpass kann von Hand mitgeholfen werden' },
+    /*
+     * Entgraten: eine Maschine fuer einen Mann. Im Engpass kann ein
+     * zweiter von Hand entgraten - langsamer, aber es verkuerzt den
+     * Durchlauf.
+     *
+     * `leistung: 0.5` - ein Mann von Hand schafft in 7,5 h so viel wie die
+     * Maschine in 3,75 h.
+     * `stundenfaktor: 2` - dieselbe Menge kostet deshalb die DOPPELTE
+     * Arbeitszeit. Ohne diesen Faktor waere die Aushilfe geschenkt.
+     */
+    ENTGRATEN: {
+      places: 1, maxPlaces: 2, workersPerPlace: 1,
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 2, validated: true,
+        label: 'von Hand entgraten',
+        text: 'Ein zweiter Mitarbeiter entgratet von Hand: halbe Leistung, doppelte Arbeitszeit '
+          + 'für dieselbe Menge – dafür ist der Arbeitsgang schneller durch.',
+      },
+      note: 'ein Platz, eine Person – im Engpass kann von Hand mitgeholfen werden',
+    },
     BIEGEN: { places: 1, workersPerPlace: 1 },
     BEIZEN: { places: 1, workersPerPlace: 1 },
-    VORMONTAGE: { places: 2, workersPerPlace: 2, note: 'zwei Plätze, je zwei Personen möglich' },
-    HYDRO: { places: 1, workersPerPlace: 1, note: 'ein Prüfstand, eine Prüfung, eine Person rüstet und prüft' },
-    ENDKONTROLLE: { places: 2, workersPerPlace: 2, note: 'zwei Plätze, je zwei Personen möglich' },
+    /*
+     * Doppelklemmring-Vormontage: zwei Plaetze, JE EINE Person - nicht
+     * "je zwei Personen" (das waere doppelte Kapazitaet, die es nicht
+     * gibt). Bestaetigt von der Abteilungsleitung 19.09.2026: "2
+     * Arbeitsplaetze und 2 Personen, pro Arbeitsplatz eine Person. Noch
+     * mehr Plaetze waeren machbar wenn noetig."
+     */
+    VORMONTAGE: { places: 2, maxPlaces: 4, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – weitere Plätze sind bei Bedarf machbar' },
+    /*
+     * Hydropruefung: ein Pruefstand. Einer kann vormontieren und dem
+     * Pruefer zuarbeiten.
+     *
+     * `leistung: 0.5` - der Arbeitsgang wird ein Drittel kuerzer.
+     * `stundenfaktor: 1` - der Zuarbeiter nimmt dem Pruefer Arbeit AB, die
+     *   Mannstunden bleiben also gleich, nur auf zwei Leute verteilt.
+     *   Anders als beim Entgraten kostet das nichts extra.
+     */
+    HYDRO: {
+      places: 1, workersPerPlace: 1,
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 1, validated: true,
+        label: 'dem Prüfer zuarbeiten',
+        text: 'Ein Mitarbeiter montiert vor und arbeitet dem Prüfer zu. Der Prüfstand ist '
+          + 'dadurch ein Drittel kürzer belegt; zusätzliche Arbeitszeit kostet es nicht.',
+      },
+      note: 'ein Prüfstand, eine Prüfung, eine Person rüstet und prüft – im Engpass kann ein Helfer zuarbeiten',
+    },
+    /*
+     * Endkontrolle: zwei Plaetze, JE EINE Person - derselbe Punkt wie bei
+     * der Vormontage. "Zusätzliche Plätze sind bei Heften, Vormontage und
+     * Endkontrolle eine Möglichkeit" - ohne maxPlaces war ein
+     * zusaetzlicher Platz als Massnahme gar nicht waehlbar
+     * (patchPlatz in engine/mehraufwand.js braucht maxPlaces>0).
+     */
+    ENDKONTROLLE: { places: 2, maxPlaces: 3, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – dritter Platz als Maßnahme möglich' },
     REINIGEN: { places: 1, workersPerPlace: 1 },
   };
 }
@@ -549,6 +600,13 @@ export function defaultConfig() {
       // Ein Prueffstand, eine Pruefung gleichzeitig (Auskunft 09/2026)
       hydroStations: 1,
       beizStations: 1,
+      /**
+       * Aushilfe an Arbeitsgaengen gemeinsam abschaltbar (Nutzeranforderung
+       * 25.09.2026: "notfalls als Helfer bei der Hydroprüfung oder
+       * Endkontrolle etc."). Je Arbeitsgang steht die eigentliche
+       * Einstellung unter byOperation[opId].aushilfe.
+       */
+      aushilfeAktiv: true,
     },
 
     nobo: {

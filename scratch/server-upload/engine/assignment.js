@@ -194,9 +194,61 @@ export function assignPeople(result, config, range = {}) {
       const plaetzeJeSchicht = plaetzeAm(config, op.opId, day);
       /* So viele Schichten laeuft dieser Arbeitsgang */
       const opSchichten = Math.max(1, Math.floor(schichtenJeOp[op.opId] ?? 1));
+      /*
+       * Aushilfe (Nutzeranforderung 25.09.2026: "notfalls als Helfer bei
+       * der Hydroprüfung oder Endkontrolle etc."): wie viele Stunden die
+       * Terminierung heute an diesem Arbeitsgang bereits als Aushilfe
+       * eingepreist hat (engine/scheduler.js, engine/capacity.js/
+       * aushilfeVon). Dort ist es ein Platz-Mehraufwand ohne Namen - hier
+       * bekommt er einen: eine sonst untaetige Person deckt ihn, statt
+       * dass die Stunde als "Arbeit vergeben" liegen bleibt.
+       */
+      let hilfeRestHeute = day?.byOp?.[op.opId]?.aushilfeManHours ?? 0;
       for (const a of op.posten.sort((x, y) => y.manHours - x.manHours)) {
         let restStunden = a.manHours;
         const besetzt = (schluessel) => (personenAn[schluessel] ??= new Set());
+        /*
+         * Weist eine sonst KOMPLETT untaetige Person (heute noch nirgends
+         * eingeteilt) als Helfer zu - ohne die Qualifikationsmatrix fuer
+         * diesen Arbeitsgang, aber begrenzt auf das, was die Terminierung
+         * bereits als Aushilfe-Mehraufwand eingepreist hat (hilfeRestHeute,
+         * siehe capacity.js/aushilfeVon). Kein Ersatz fuer eine
+         * qualifizierte Person - nur der ausdrueckliche "notfalls"-Fall.
+         * @returns {boolean} ob eine Stunde gedeckt werden konnte
+         */
+        const versucheAushilfe = () => {
+          if (hilfeRestHeute <= 0.01 || restStunden <= 0.01) return false;
+          const frei = anwesend.filter((p) => !heuteAn[p.id]?.length && (rest[p.id] ?? 0) > 0.01);
+          if (frei.length === 0) return false;
+          frei.sort((x, y) => {
+            const lx = byPerson[x.id].hours / Math.max(0.1, byPerson[x.id].factor);
+            const ly = byPerson[y.id].hours / Math.max(0.1, byPerson[y.id].factor);
+            if (Math.abs(lx - ly) > 0.01) return lx - ly;
+            return x.id < y.id ? -1 : 1;
+          });
+          const p = frei[0];
+          const nimm = round2(Math.min(rest[p.id], restStunden, hilfeRestHeute));
+          if (nimm <= 0.01) return false;
+          (heuteAn[p.id] ??= []).push(a.opId);
+          rest[p.id] = round2(rest[p.id] - nimm);
+          restStunden = round2(restStunden - nimm);
+          hilfeRestHeute = round2(hilfeRestHeute - nimm);
+          eintraege.push({
+            personId: p.id, opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
+            projectId: a.projectId,
+            orderNo: projectName.get(a.projectId) ?? a.projectId,
+            hours: nimm,
+            schicht: schichtVon[p.id] ?? 1,
+            /** Ohne Qualifikationsmatrix, nur als Aushilfe eingesetzt */
+            helfer: true,
+          });
+          const bp = byPerson[p.id];
+          bp.hours = round2(bp.hours + nimm);
+          bp.byOp[a.opId] = round2((bp.byOp[a.opId] ?? 0) + nimm);
+          const wk = weekKey(date);
+          bp.byWeek[wk] = round2((bp.byWeek[wk] ?? 0) + nimm);
+          return true;
+        };
         while (restStunden > 0.01) {
           /*
            * Die Schicht mit den meisten freien Leuten zuerst. Die
@@ -218,7 +270,11 @@ export function assignPeople(result, config, range = {}) {
             if (frei.length === 0) continue;
             if (beste === null || frei.length > beste.frei.length) beste = { sn, drauf, frei };
           }
-          if (beste === null) break;
+          if (beste === null) {
+            const gedeckt = versucheAushilfe();
+            if (!gedeckt) break;
+            continue;
+          }
           const drauf = beste.drauf;
           const koennen = beste.frei;
           /*

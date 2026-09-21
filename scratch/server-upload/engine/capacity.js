@@ -346,7 +346,9 @@ export function placesFor(config, opId) {
 
 /**
  * Wie viele Personen koennen an einem Platz dieses Arbeitsganges gleichzeitig
- * arbeiten? Bei Vormontage und Endkontrolle sind es zwei, sonst eine.
+ * arbeiten? Ueberall eine - auch bei Vormontage und Endkontrolle (bestaetigt
+ * von der Abteilungsleitung 19.09.2026: "2 Arbeitsplaetze und 2 Personen,
+ * pro Arbeitsplatz eine Person").
  * @param {any} config @param {string} opId
  */
 export function workersPerPlace(config, opId) {
@@ -355,6 +357,37 @@ export function workersPerPlace(config, opId) {
   const own = res.byOperation?.[opId]?.workersPerPlace;
   if (own != null && own !== '') return Math.max(0, Number(own));
   return 1;
+}
+
+/**
+ * Aushilfe an einem Arbeitsgang (Nutzeranforderung 25.09.2026: "notfalls
+ * als Helfer bei der Hydroprüfung oder Endkontrolle etc.").
+ *
+ * Sie hebt die PLATZgrenze, nicht die Mannschaft - eine zusaetzliche, nicht
+ * fuer diesen Arbeitsgang qualifizierte Person kann dort aushelfen und so
+ * zusaetzlichen Durchsatz schaffen, wenn sie sonst untaetig waere. Anders
+ * als die normale Besetzung ist sie KEIN Namensbudget in der Terminierung
+ * (siehe scheduler.js) - erst der Einsatzplan (assignment.js) weist ihr
+ * tatsaechlich eine Person zu.
+ *
+ * @param {any} config @param {string} opId
+ * @returns {{max:number, leistung:number, stundenfaktor:number, label:string, text:string}|null}
+ */
+export function aushilfeVon(config, opId) {
+  const res = config.resources ?? {};
+  if (res.aushilfeAktiv === false) return null;
+  const a = res.byOperation?.[opId]?.aushilfe;
+  if (!a) return null;
+  const max = Math.max(0, Number(a.max ?? 0));
+  const leistung = Math.max(0, Number(a.leistung ?? 0));
+  if (max <= 0 || leistung <= 0) return null;
+  return {
+    max,
+    leistung,
+    stundenfaktor: Math.max(1, Number(a.stundenfaktor ?? 1)),
+    label: String(a.label ?? 'Aushilfe'),
+    text: String(a.text ?? ''),
+  };
 }
 
 /**
@@ -514,7 +547,8 @@ export function poolHoursFor(config, date) {
  *   date:string, kind:string, headcount:any, productivity:number,
  *   hoursPerEmployee:number, poolHours:number, poolGross:number, mentoringHours:number,
  *   reserveHours:number, saturdayHeadcount:number|null,
- *   byOp: Record<string, {capUnits:number, capManHours:number, limiter:string, detail:any}>,
+ *   byOp: Record<string, {capUnits:number, capManHours:number, capOhneAushilfe:number,
+ *     aushilfeStundenfaktor:number, limiter:string, detail:any}>,
  *   resources: any
  * }}
  */
@@ -661,6 +695,29 @@ export function dayCapacity(config, date) {
       }
     }
 
+    /*
+     * Aushilfe: Sie hebt die PLATZgrenze, nicht die Mannschaft.
+     *
+     * Deshalb steht sie hier ganz am Ende und wirkt nur, wenn der Platz
+     * die engste Stelle war. Begrenzt gerade die Mannschaft, der
+     * Materialtermin oder ein Prueftag, aendert eine Aushilfe nichts - und
+     * sie wird dann auch nicht ausgewiesen.
+     */
+    const hilfe = aushilfeVon(config, op.id);
+    const plaetzeBegrenzen = limiter === LIMITER.WORKPLACE || limiter === LIMITER.HYDRO_STATION
+      || limiter === LIMITER.BEIZ_STATION || limiter === LIMITER.HEFTPLATZ;
+    if (hilfe && plaetzeBegrenzen && capUnits > 0) {
+      const zusatz = hilfe.max * hilfe.leistung * opWindow * prod;
+      detail.aushilfe = {
+        label: hilfe.label,
+        text: hilfe.text,
+        einheiten: round2(zusatz),
+        stundenfaktor: hilfe.stundenfaktor,
+        ohneAushilfe: round2(capUnits),
+      };
+      capUnits += zusatz;
+    }
+
     // Wochentagsregel der Abteilung (siehe rules.js)
     const allowedDays = config.operationWeekdays?.[op.id];
     if (Array.isArray(allowedDays) && allowedDays.length > 0 && !allowedDays.includes(weekday(date))) {
@@ -672,6 +729,9 @@ export function dayCapacity(config, date) {
     byOp[op.id] = {
       capUnits: round2(Math.max(0, capUnits)),
       capManHours: round2(Math.max(0, capUnits) * f),
+      /** Was OHNE Aushilfe moeglich waere - damit ist sie nachrechenbar. */
+      capOhneAushilfe: round2(Math.max(0, detail.aushilfe ? detail.aushilfe.ohneAushilfe : capUnits)),
+      aushilfeStundenfaktor: detail.aushilfe ? detail.aushilfe.stundenfaktor : 1,
       limiter,
       detail,
     };

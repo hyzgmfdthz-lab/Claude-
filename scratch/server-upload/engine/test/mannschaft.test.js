@@ -8,7 +8,9 @@ import { testConfig, template, createProject } from './helpers.js';
 import { defaultTeam, teamOn, skillShares, shiftCapability, qualifiedFor, peopleOf, rateOf, averageRate, mentoringHoursOfTeam } from '../team.js';
 import { assignPeople, personWeek } from '../assignment.js';
 import { runSchedule } from '../scheduler.js';
-import { dayCapacity, placesFor, workersPerPlace } from '../capacity.js';
+import {
+  dayCapacity, placesFor, workersPerPlace, aushilfeVon,
+} from '../capacity.js';
 import { seedDataset } from '../seed.js';
 import { materialize } from '../scenario.js';
 import { analyze } from '../index.js';
@@ -366,9 +368,20 @@ test('Einsatzplan: an einem Platz stehen nicht mehr Leute, als er zulässt', () 
       // Platzstunden - genau das ist die harte Grenze.
       const stunden = tag.entries.filter((e) => e.personId && e.opId === opId)
         .reduce((a, e) => a + e.hours, 0);
-      const platzStunden = Number(plaetze) * jePlatz
-        * Number(cfg.resources?.byOperation?.[opId]?.operatingHoursPerDay
-          ?? cfg.resources?.operatingHoursPerDay ?? 7.5);
+      const opWindow = Number(cfg.resources?.byOperation?.[opId]?.operatingHoursPerDay
+        ?? cfg.resources?.operatingHoursPerDay ?? 7.5);
+      let platzStunden = Number(plaetze) * jePlatz * opWindow;
+      /*
+       * Aushilfe (Nutzeranforderung 25.09.2026) hebt die Platzgrenze
+       * bewusst - eine sonst untaetige Person darf dort zusaetzlich
+       * mithelfen. Die harte Grenze ist deshalb Platzstunden PLUS die
+       * hinterlegte Aushilfe-Obergrenze, nicht mehr die reine Platzstunde.
+       * Aushilfestunden kosten mehr Arbeitszeit als Inhalt (stundenfaktor)
+       * - fuer den Vergleich mit tatsaechlich verplanten PERSONENSTUNDEN
+       * zaehlt deshalb der Stundenfaktor mit, nicht nur der Arbeitsinhalt.
+       */
+      const hilfe = aushilfeVon(cfg, opId);
+      if (hilfe) platzStunden += hilfe.max * hilfe.leistung * opWindow * hilfe.stundenfaktor;
       assert.ok(stunden <= platzStunden + 0.5,
         `${tag.date} ${opId}: ${stunden.toFixed(1)} h auf ${plaetze} Plätzen `
         + `(höchstens ${platzStunden.toFixed(1)} h), ${leute.size} Personen`);
@@ -490,4 +503,103 @@ test('Qualifikationsmatrix: ein Arbeitsgang ohne Qualifizierte ist kritisch', ()
   const b2 = analyze(ds, sz.id).plausibility.items
     .find((x) => x.code === 'ARBEITSGANG_OHNE_QUALIFIZIERTE');
   assert.match(b2.title, /2 Arbeitsgänge ohne/);
+});
+
+/* ------------------------------------------------------------------ *
+ * Aushilfe / Helfer (Nutzeranforderung 25.09.2026)
+ * ------------------------------------------------------------------ */
+
+function helferPerson(id, skills) {
+  return {
+    id, label: id, role: '', kind: 'STAMM', factor: 1, rate: null, shiftCapable: true,
+    skills, absences: [], weeks: {}, pinnedOps: {}, startDate: null, endDate: null,
+    defaultActive: true, active: true, note: '',
+  };
+}
+
+test('Aushilfe: eine sonst untätige Person wird als Helfer benannt statt "Arbeit vergeben" zu stehen', () => {
+  /*
+   * Nutzeranforderung 25.09.2026: "MAAP muss in dem Fall einem
+   * Arbeitsgang zugewiesen werden, notfalls als Helfer bei der
+   * Hydroprüfung oder Endkontrolle etc." Konstruiert direkt auf
+   * assignPeople(), weil das Zustandekommen der Aushilfe-Kapazität
+   * (Terminierung + Kapazitätsrechnung) bereits in anderen Tests
+   * (capacity.test.js, scheduler.test.js) geprüft wird - hier geht es
+   * ausschließlich darum, dass eine benannte Person daraus wird.
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 2,
+      team: {
+        source: 'MANNSCHAFT', enforceSkills: true,
+        people: [helferPerson('A', { ENTGRATEN: true }), helferPerson('MAAP', {})],
+      },
+    },
+    resources: {
+      byOperation: {
+        ENTGRATEN: {
+          places: 1, workersPerPlace: 1,
+          aushilfe: {
+            max: 1, leistung: 0.5, stundenfaktor: 2, label: 'von Hand entgraten', text: 't',
+          },
+        },
+      },
+    },
+  });
+  const date = '2026-09-21';
+  const result = {
+    config, projects: [], blocked: [],
+    daySeries: [{
+      date, kind: 'REGULAR', weekKey: '2026-W39', hoursPerEmployee: 7.5, productivity: 1,
+      byOp: { ENTGRATEN: { aushilfeManHours: 7.5 } },
+    }],
+    allocations: [{ date, projectId: 'P1', opId: 'ENTGRATEN', manHours: 15 }],
+  };
+
+  const plan = assignPeople(result, config, {});
+  const tag = plan.days.find((d) => d.date === date);
+  assert.deepEqual(tag.idle, [], 'niemand darf ohne Grund/Zuteilung dastehen, wenn Aushilfe möglich ist');
+
+  const maap = tag.entries.find((e) => e.personId === 'MAAP');
+  assert.ok(maap, 'MAAP muss eine Zeile im Einsatzplan bekommen, nicht nur "Arbeit vergeben"');
+  assert.equal(maap.opId, 'ENTGRATEN');
+  assert.equal(maap.helfer, true, 'die Zuteilung muss als Aushilfe erkennbar sein, nicht als reguläre Qualifikation');
+  assert.equal(maap.hours, 7.5);
+
+  const a = tag.entries.find((e) => e.personId === 'A');
+  assert.ok(a && !a.helfer, 'die qualifizierte Person bleibt regulär, nicht als Helfer markiert');
+});
+
+test('Aushilfe: kein Helfer, wenn die Terminierung keine Aushilfe eingepreist hat', () => {
+  /*
+   * Gegenprobe: ohne aushilfeManHours an diesem Tag darf niemand als
+   * Helfer eingesetzt werden, auch wenn eine Person untätig ist - sonst
+   * würde die Aushilfe zur stillen Umgehung der Qualifikationsmatrix.
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 2,
+      team: {
+        source: 'MANNSCHAFT', enforceSkills: true,
+        people: [helferPerson('A', { ENTGRATEN: true }), helferPerson('MAAP', {})],
+      },
+    },
+  });
+  const date = '2026-09-21';
+  const result = {
+    config, projects: [], blocked: [],
+    daySeries: [{
+      date, kind: 'REGULAR', weekKey: '2026-W39', hoursPerEmployee: 7.5, productivity: 1,
+      byOp: { ENTGRATEN: { aushilfeManHours: 0 } },
+    }],
+    allocations: [{ date, projectId: 'P1', opId: 'ENTGRATEN', manHours: 7.5 }],
+  };
+
+  const plan = assignPeople(result, config, {});
+  const tag = plan.days.find((d) => d.date === date);
+  const maap = tag.entries.find((e) => e.personId === 'MAAP');
+  assert.equal(maap, undefined, 'ohne eingepreiste Aushilfe darf MAAP nicht an ENTGRATEN eingesetzt werden');
+  const idle = tag.idle.find((i) => i.id === 'MAAP');
+  assert.ok(idle, 'MAAP steht stattdessen korrekt als ohne Arbeit da');
+  assert.equal(idle.grund, 'KEINE_QUALIFIKATION');
 });

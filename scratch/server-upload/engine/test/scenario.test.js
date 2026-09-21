@@ -74,7 +74,17 @@ test('Optimierer: verbessert die Termintreue und liefert nachvollziehbare Maßna
   assert.ok(r.measures.length > 0, 'Es müssen Maßnahmen vorgeschlagen werden');
   assert.ok(r.kpisAfter.otd > r.kpisBefore.otd, 'Die Termintreue muss steigen');
   assert.ok(r.kpisAfter.late < r.kpisBefore.late);
-  assert.ok(dauer < 20000, `Optimierung zu langsam: ${dauer} ms`);
+  /*
+   * Budget 25.09.2026 von 20000 auf 25000 ms angehoben: die Aushilfe an
+   * Endkontrolle/Entgraten/Hydro (Nutzeranforderung 25.09.2026) macht den
+   * dritten Endkontrolle-Platz zu einer echten, zusaetzlichen Massnahme
+   * (siehe "Zusätzlicher Arbeitsplatz..."-Test) - ein Kandidat mehr je
+   * Optimierungsrunde. Per direktem Benchmark bestaetigt: runSchedule()
+   * selbst wurde durch die Aushilfe NICHT langsamer (30 Laeufe alt vs neu
+   * im Rahmen der Messschwankung). Dieses Testbudget schwankte in dieser
+   * Sandbox schon vor der Aushilfe zwischen 18,98 s und 24,5 s.
+   */
+  assert.ok(dauer < 25000, `Optimierung zu langsam: ${dauer} ms`);
   for (const m of r.measures) {
     assert.ok(m.label && m.description, 'Jede Maßnahme braucht eine verständliche Beschreibung');
   }
@@ -249,12 +259,15 @@ test('Zusätzlicher Arbeitsplatz wird nur vorgeschlagen, wo es ihn geben kann', 
    * Vorgeschlagen wird ein zusaetzlicher Platz nur dort, wo es ihn geben
    * kann: ein zweiter Saegeplatz (Auskunft der Abteilung), ein zweiter
    * Vorgang in der Arbeitsvorbereitung (Schreibtischarbeit, kein
-   * Werkstattplatz) und Entgraten ("Engpass kann ggf. von Hand
-   * mitgeholfen werden", Auskunft der Abteilungsleitung 09/2026).
-   * Fuer Biegen und Beizen steht ausdruecklich kein zweiter Platz zur
+   * Werkstattplatz), Entgraten ("Engpass kann ggf. von Hand mitgeholfen
+   * werden", Auskunft der Abteilungsleitung 09/2026) und ein dritter
+   * Endkontrolle-Platz ("Zusätzliche Plätze sind bei Heften, Vormontage
+   * und Endkontrolle eine Möglichkeit", bestätigt 21.09.2026). Fuer
+   * Biegen und Beizen steht ausdruecklich kein zweiter Platz zur
    * Verfuegung - sie duerfen hier nicht auftauchen.
    */
-  assert.deepEqual(plaetze.map((m) => m.type).sort(), ['PLACE_AV', 'PLACE_ENTGRATEN', 'PLACE_SAEGEN']);
+  assert.deepEqual(plaetze.map((m) => m.type).sort(),
+    ['PLACE_AV', 'PLACE_ENDKONTROLLE', 'PLACE_ENTGRATEN', 'PLACE_SAEGEN']);
   const saege = plaetze.find((m) => m.type === 'PLACE_SAEGEN');
   assert.ok(saege.label.includes('Sägen'));
   assert.ok(saege.savedLateDays > 0, 'der zweite Sägeplatz muss Verspätung abbauen');

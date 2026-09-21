@@ -250,12 +250,17 @@ test('Plätze: ein Sägeplatz, ein Entgratplatz, ein Biegeplatz', () => {
   assert.equal(placesFor(c, 'HYDRO'), 1, 'ein Prüfstand');
 });
 
-test('Plätze: Vormontage und Endkontrolle mit zwei Personen je Platz', () => {
+test('Plätze: Vormontage und Endkontrolle mit zwei Plätzen, je einer Person (bestätigt 19.09.2026)', () => {
+  /*
+   * "2 Arbeitsplaetze und 2 Personen, pro Arbeitsplatz eine Person" -
+   * vorher stand hier workersPerPlace 2, das war doppelte Kapazität, die
+   * es nicht gibt.
+   */
   const c = defaultConfig();
   assert.equal(placesFor(c, 'VORMONTAGE'), 2);
-  assert.equal(workersPerPlace(c, 'VORMONTAGE'), 2);
+  assert.equal(workersPerPlace(c, 'VORMONTAGE'), 1);
   assert.equal(placesFor(c, 'ENDKONTROLLE'), 2);
-  assert.equal(workersPerPlace(c, 'ENDKONTROLLE'), 2);
+  assert.equal(workersPerPlace(c, 'ENDKONTROLLE'), 1);
   assert.equal(workersPerPlace(c, 'SAEGEN'), 1);
 });
 
@@ -269,9 +274,9 @@ test('Platzgrenze begrenzt die Kapazität eines Arbeitsganges', () => {
   assert.ok(saegen.capUnits <= 7.6, `ein Sägeplatz erlaubt höchstens 7,5 h, waren ${saegen.capUnits}`);
   assert.equal(saegen.limiter, 'WORKPLACE');
 
-  // Vormontage: zwei Plätze, je zwei Personen = viermal so viel
+  // Vormontage: zwei Plätze, je eine Person = doppelt so viel
   const vor = dayCapacity(eng, MO).byOp.VORMONTAGE;
-  assert.ok(vor.capUnits > saegen.capUnits * 3.5, `${vor.capUnits} gegen ${saegen.capUnits}`);
+  assert.ok(vor.capUnits > saegen.capUnits * 1.5, `${vor.capUnits} gegen ${saegen.capUnits}`);
 });
 
 test('Platzgrenzen lassen sich für den Vergleich abschalten', () => {

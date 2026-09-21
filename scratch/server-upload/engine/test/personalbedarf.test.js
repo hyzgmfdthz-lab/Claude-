@@ -420,7 +420,10 @@ test('Stau: die Summe ist Stunden mal Tage – nicht als Stunden lesbar', () => 
   assert.ok(hydro, 'die Hydroprüfung steht in der Auslastung');
   // Genau hier lag der Denkfehler: Die Summe liegt weit über den möglichen
   // Stunden des Arbeitsplatzes - als Stundenzahl wäre sie unmöglich.
-  assert.ok(hydro.blockedHours > hydro.totalCapacityHours * 0.8,
+  // (Schwelle 25.09.2026 von 0,8 auf 0,6 gesenkt: die Aushilfe an der
+  // Hydroprüfung - Nutzeranforderung 25.09.2026 - hebt totalCapacityHours
+  // an und senkt dadurch den Anteil legitim.)
+  assert.ok(hydro.blockedHours > hydro.totalCapacityHours * 0.6,
     `die Summe über die Tage (${hydro.blockedHours}) liegt in der Größenordnung der möglichen `
     + `Belegungszeit (${hydro.totalCapacityHours}) oder darüber – als Stundenzahl unbrauchbar`);
   // Die ausgewiesene Spitze dagegen bleibt darunter und ist vorstellbar.

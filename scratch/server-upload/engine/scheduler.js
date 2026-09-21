@@ -217,6 +217,20 @@ export function runSchedule(input) {
       poolRest: cap.poolHours,
       personRest, qualifiedIds,
       opRest: Object.fromEntries(Object.entries(cap.byOp).map(([k, v]) => [k, v.capUnits])),
+      /*
+       * Aushilfe (Nutzeranforderung 25.09.2026): wie viele Einheiten des
+       * heutigen opRest nur durch Aushilfe entstanden sind, und zu welchem
+       * Stundenfaktor sie kosten. Getrennt gehalten, weil eine Aushilfe-
+       * Einheit die Mannschaft mehr kostet als eine normale (siehe
+       * allocateProjectDay) - ohne die Trennung waere die Aushilfe
+       * geschenkt.
+       */
+      opAushilfe: Object.fromEntries(Object.entries(cap.byOp).map(([k, v]) => [
+        k, Math.max(0, (v.capUnits ?? 0) - (v.capOhneAushilfe ?? v.capUnits ?? 0)),
+      ])),
+      opAushilfeFaktor: Object.fromEntries(Object.entries(cap.byOp).map(([k, v]) => [
+        k, Number(v.aushilfeStundenfaktor ?? 1),
+      ])),
       maxWorkersProject, maxLead, targetLead,
     };
 
@@ -414,6 +428,9 @@ function newDayRecord(date, cap) {
       capUnits: c.capUnits, usedUnits: 0,
       capManHours: c.capManHours, usedManHours: 0,
       limiter: c.limiter,
+      /** Was OHNE Aushilfe moeglich waere - damit ist sie nachrechenbar. */
+      capOhneAushilfe: c.capOhneAushilfe ?? c.capUnits,
+      aushilfeUnits: 0, aushilfeManHours: 0,
     };
   }
   return rec;
@@ -480,7 +497,21 @@ function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
         ? qualIds.reduce((a, id) => a + Math.max(0, ctx.personRest[id] ?? 0), 0)
         : Infinity;
 
-      const poolUnits = ctx.poolRest / f;
+      /*
+       * Aushilfestunden kosten mehr: von Hand entgraten braucht fuer
+       * dieselbe Menge die doppelte Arbeitszeit. Der Poolvorrat muss
+       * deshalb zum TEUERSTEN Satz gerechnet werden, der an diesem
+       * Arbeitsgang heute noch greifen kann - sonst wuerde mehr zugeteilt,
+       * als die Mannschaft tragen kann.
+       *
+       * Aushilfe ist kein Namensbudget, sondern ein Platz-Mehraufwand
+       * (siehe capacity.js/aushilfeVon) - sie zaehlt deshalb NICHT gegen
+       * das Personen-Stundenkonto (Kritisch02), nur die normale Belegung.
+       */
+      const hilfeRest = ctx.opAushilfe?.[op.opId] ?? 0;
+      const hilfeFaktor = ctx.opAushilfeFaktor?.[op.opId] ?? 1;
+      const normalRest = Math.max(0, capOpUnits - hilfeRest);
+
       const personUnits = qualIds ? personCapRest / f : Infinity;
       const projectUnits = projectManRest / f;
       // Obergrenze je Arbeitsgang: sie gilt fuer den GANZEN Tag. Da ein Tag in
@@ -492,27 +523,50 @@ function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
           - (op.byDate[date] ?? 0))
         : Infinity;
 
+      /*
+       * Wie viel Arbeitsinhalt traegt der Poolvorrat noch? Erst der Platz
+       * zum normalen Satz, dann die Aushilfe zu ihrem teureren - sonst
+       * wuerde der billige Satz auch fuer die Aushilfe gelten und der Pool
+       * waere ueberzogen.
+       */
+      const normalMoeglich = Math.min(normalRest, ctx.poolRest / f, personUnits);
+      const poolNachNormal = Math.max(0, ctx.poolRest - normalMoeglich * f);
+      const hilfeMoeglich = Math.min(hilfeRest, poolNachNormal / (f * hilfeFaktor));
+      const poolUnits = normalMoeglich + hilfeMoeglich;
+
       const wanted = Math.min(op.remainingUnits, allow.units);
-      const granted = Math.max(0, Math.min(wanted, capOpUnits, poolUnits, personUnits, projectUnits, opWorkerUnits));
+      const granted = Math.max(0, Math.min(wanted, capOpUnits, poolUnits, projectUnits, opWorkerUnits));
       if (granted <= EPS) continue;
 
       // remainingUnits ist die fuehrende Groesse; doneUnits wird abgeleitet,
       // damit beide Werte nicht auseinanderlaufen koennen.
       op.remainingUnits = clampHours(op.remainingUnits - granted);
       op.doneUnits = op.totalUnits - op.remainingUnits;
-      const man = granted * f;
+      // Der Platz wird zuerst normal belegt, der Rest geht auf die
+      // Aushilfe - und die kostet ihren Stundenfaktor.
+      const ausNormal = Math.min(granted, normalRest);
+      const ausHilfe = Math.max(0, granted - ausNormal);
+      const man = ausNormal * f + ausHilfe * f * hilfeFaktor;
+      if (ausHilfe > EPS) {
+        ctx.opAushilfe[op.opId] = clampHours(hilfeRest - ausHilfe);
+        ctx.dayRecord.byOp[op.opId].aushilfeUnits = round2((ctx.dayRecord.byOp[op.opId].aushilfeUnits ?? 0) + ausHilfe);
+        ctx.dayRecord.byOp[op.opId].aushilfeManHours = round2(
+          (ctx.dayRecord.byOp[op.opId].aushilfeManHours ?? 0) + ausHilfe * f * hilfeFaktor,
+        );
+      }
       op.plannedManHours = round2(op.plannedManHours + man);
       op.byDate[date] = round2((op.byDate[date] ?? 0) + granted);
       op.firstDate ??= date;
       op.lastDate = date;
 
       /*
-       * FIX Kritisch02: das gemeinsame Personen-Stundenkonto verringern.
-       * Wer hier verplant ist, steht heute keinem anderen Arbeitsgang mehr
-       * zur Verfuegung - egal aus welchem Auftrag die naechste Anfrage kommt.
+       * FIX Kritisch02: das gemeinsame Personen-Stundenkonto um die
+       * NORMALE Belegung verringern (Aushilfe ist kein Namensbudget). Wer
+       * hier verplant ist, steht heute keinem anderen Arbeitsgang mehr zur
+       * Verfuegung - egal aus welchem Auftrag die naechste Anfrage kommt.
        */
-      if (qualIds && man > EPS) {
-        let restZuVerteilen = man;
+      if (qualIds && ausNormal > EPS) {
+        let restZuVerteilen = ausNormal * f;
         for (const id of qualIds) {
           if (restZuVerteilen <= EPS) break;
           const habenNoch = ctx.personRest[id] ?? 0;
@@ -525,7 +579,12 @@ function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
 
       ctx.poolRest = clampHours(ctx.poolRest - man);
       ctx.opRest[op.opId] = clampHours(capOpUnits - granted);
-      projectManRest = projectManRest === Infinity ? Infinity : clampHours(projectManRest - man);
+      /*
+       * Vom Auftrag geht nur der ARBEITSINHALT ab. Der Mehraufwand der
+       * Aushilfe kostet Arbeitszeit (Pool), macht den Auftrag aber nicht
+       * weiter fertig.
+       */
+      projectManRest = projectManRest === Infinity ? Infinity : clampHours(projectManRest - granted * f);
       usedTotal += man;
 
       ctx.dayRecord.poolUsed = round2(ctx.dayRecord.poolUsed + man);
