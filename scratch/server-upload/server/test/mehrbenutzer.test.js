@@ -11,7 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openStore } from '../store.js';
-import { createApi } from '../api.js';
+import { createApi, describeConfigPatch } from '../api.js';
 import { readXlsx } from '../xlsx.js';
 import { createServer } from '../server.js';
 
@@ -311,6 +311,25 @@ test('Vollständige Datensicherung als JSON: nur die Verwaltung darf', () => {
   assert.ok(Array.isArray(geladen.projects) && geladen.projects.length > 0);
   assert.ok(Array.isArray(geladen.scenarios) && geladen.scenarios.length > 0);
   assert.ok(Array.isArray(geladen.users) && geladen.users.some((u) => u.id === 'DOHE'));
+});
+
+test('Änderungsprotokoll: Mannschaftsänderung wird lesbar zusammengefasst', () => {
+  /*
+   * FIX (gefunden 21.09.2026 anhand eines Screenshots): eine Änderung an
+   * workforce.team.people (Qualifikationsmatrix) stand bisher wörtlich als
+   * "workforce.team.people: [object Object],[object Object],..." im
+   * Änderungsprotokoll - jedes Mal, wenn jemand eine Qualifikation oder
+   * Abwesenheit einer Person änderte.
+   */
+  const texte = describeConfigPatch({
+    workforce: { team: { people: [{ id: 'MAAP' }, { id: 'JARO' }, { id: 'SOVA' }] } },
+  });
+  assert.ok(texte.some((t) => t.includes('Mannschaft geändert (3 Personen)')));
+  assert.ok(!texte.some((t) => t.includes('[object Object]')));
+
+  // Absicherung fuer noch unbenannte Listen von Objekten
+  const allgemein = describeConfigPatch({ irgendeinNeuesFeld: [{ x: 1 }, { x: 2 }] });
+  assert.ok(!allgemein.some((t) => t.includes('[object Object]')));
 });
 
 /* ================================================================== *

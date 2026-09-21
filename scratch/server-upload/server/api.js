@@ -1937,6 +1937,20 @@ export function describeConfigPatch(patch, before = null) {
           : `${label}: keine`);
         continue;
       }
+      /*
+       * FIX (gefunden 21.09.2026 anhand eines Screenshots): ohne diesen
+       * Sonderfall fiel `workforce.team.people` (Liste von Personen-
+       * Objekten - die Qualifikationsmatrix der Mannschaft) auf den
+       * allgemeinen Fall zurueck, der einen Wert einfach in Text umwandelt.
+       * Ein Array von Objekten wird dabei zu "[object Object],[object
+       * Object],..." - stand wörtlich so im Änderungsprotokoll, bei jeder
+       * Änderung an einer Qualifikation oder Abwesenheit.
+       */
+      if (path === 'workforce.team.people') {
+        const list = Array.isArray(value) ? value : [];
+        out.push(`Mannschaft geändert (${list.length} Personen)`);
+        continue;
+      }
       if (path === 'workforce.weekly') {
         const n = Object.values(value ?? {}).filter((w) => w && Object.keys(w).length).length;
         out.push(n === 0 ? 'Wochenwerte entfernt' : `Wochenwerte für ${n} Kalenderwochen gepflegt`);
@@ -1976,6 +1990,10 @@ export function describeConfigPatch(patch, before = null) {
         out.push(old !== undefined && old !== null && String(old) !== String(value)
           ? `${label}: ${formatValue(old, kind)} → ${now}`
           : `${label}: ${now}`);
+      } else if (Array.isArray(value) && value.some((x) => x && typeof x === 'object')) {
+        // Allgemeine Absicherung fuer noch unbenannte Listen von Objekten -
+        // sonst wieder "[object Object],[object Object],..." im Protokoll.
+        out.push(`${path}: ${value.length} Einträge geändert`);
       } else {
         out.push(`${path}: ${formatValue(value, 'text')}`);
       }
