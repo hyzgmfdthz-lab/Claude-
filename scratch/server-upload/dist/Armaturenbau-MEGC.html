@@ -14855,12 +14855,63 @@ function defaultPlaces() {
      */
     AV: { places: 1, maxPlaces: 2, workersPerPlace: 1, note: 'ein Vorgang gleichzeitig – zu validieren' },
     SAEGEN: { places: 1, maxPlaces: 2, workersPerPlace: 1, note: 'ein Platz, ein zweiter ist bei Bedarf einrichtbar' },
-    ENTGRATEN: { places: 1, maxPlaces: 2, workersPerPlace: 1, note: 'ein Platz, eine Person – im Engpass kann von Hand mitgeholfen werden' },
+    /*
+     * Entgraten: eine Maschine fuer einen Mann. Im Engpass kann ein
+     * zweiter von Hand entgraten - langsamer, aber es verkuerzt den
+     * Durchlauf.
+     *
+     * `leistung: 0.5` - ein Mann von Hand schafft in 7,5 h so viel wie die
+     * Maschine in 3,75 h.
+     * `stundenfaktor: 2` - dieselbe Menge kostet deshalb die DOPPELTE
+     * Arbeitszeit. Ohne diesen Faktor waere die Aushilfe geschenkt.
+     */
+    ENTGRATEN: {
+      places: 1, maxPlaces: 2, workersPerPlace: 1,
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 2, validated: true,
+        label: 'von Hand entgraten',
+        text: 'Ein zweiter Mitarbeiter entgratet von Hand: halbe Leistung, doppelte Arbeitszeit '
+          + 'für dieselbe Menge – dafür ist der Arbeitsgang schneller durch.',
+      },
+      note: 'ein Platz, eine Person – im Engpass kann von Hand mitgeholfen werden',
+    },
     BIEGEN: { places: 1, workersPerPlace: 1 },
     BEIZEN: { places: 1, workersPerPlace: 1 },
-    VORMONTAGE: { places: 2, workersPerPlace: 2, note: 'zwei Plätze, je zwei Personen möglich' },
-    HYDRO: { places: 1, workersPerPlace: 1, note: 'ein Prüfstand, eine Prüfung, eine Person rüstet und prüft' },
-    ENDKONTROLLE: { places: 2, workersPerPlace: 2, note: 'zwei Plätze, je zwei Personen möglich' },
+    /*
+     * Doppelklemmring-Vormontage: zwei Plaetze, JE EINE Person - nicht
+     * "je zwei Personen" (das waere doppelte Kapazitaet, die es nicht
+     * gibt). Bestaetigt von der Abteilungsleitung 19.09.2026: "2
+     * Arbeitsplaetze und 2 Personen, pro Arbeitsplatz eine Person. Noch
+     * mehr Plaetze waeren machbar wenn noetig."
+     */
+    VORMONTAGE: { places: 2, maxPlaces: 4, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – weitere Plätze sind bei Bedarf machbar' },
+    /*
+     * Hydropruefung: ein Pruefstand. Einer kann vormontieren und dem
+     * Pruefer zuarbeiten.
+     *
+     * `leistung: 0.5` - der Arbeitsgang wird ein Drittel kuerzer.
+     * `stundenfaktor: 1` - der Zuarbeiter nimmt dem Pruefer Arbeit AB, die
+     *   Mannstunden bleiben also gleich, nur auf zwei Leute verteilt.
+     *   Anders als beim Entgraten kostet das nichts extra.
+     */
+    HYDRO: {
+      places: 1, workersPerPlace: 1,
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 1, validated: true,
+        label: 'dem Prüfer zuarbeiten',
+        text: 'Ein Mitarbeiter montiert vor und arbeitet dem Prüfer zu. Der Prüfstand ist '
+          + 'dadurch ein Drittel kürzer belegt; zusätzliche Arbeitszeit kostet es nicht.',
+      },
+      note: 'ein Prüfstand, eine Prüfung, eine Person rüstet und prüft – im Engpass kann ein Helfer zuarbeiten',
+    },
+    /*
+     * Endkontrolle: zwei Plaetze, JE EINE Person - derselbe Punkt wie bei
+     * der Vormontage. "Zusätzliche Plätze sind bei Heften, Vormontage und
+     * Endkontrolle eine Möglichkeit" - ohne maxPlaces war ein
+     * zusaetzlicher Platz als Massnahme gar nicht waehlbar
+     * (patchPlatz in engine/mehraufwand.js braucht maxPlaces>0).
+     */
+    ENDKONTROLLE: { places: 2, maxPlaces: 3, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – dritter Platz als Maßnahme möglich' },
     REINIGEN: { places: 1, workersPerPlace: 1 },
   };
 }
@@ -15173,6 +15224,13 @@ function defaultConfig() {
       // Ein Prueffstand, eine Pruefung gleichzeitig (Auskunft 09/2026)
       hydroStations: 1,
       beizStations: 1,
+      /**
+       * Aushilfe an Arbeitsgaengen gemeinsam abschaltbar (Nutzeranforderung
+       * 25.09.2026: "notfalls als Helfer bei der Hydroprüfung oder
+       * Endkontrolle etc."). Je Arbeitsgang steht die eigentliche
+       * Einstellung unter byOperation[opId].aushilfe.
+       */
+      aushilfeAktiv: true,
     },
 
     nobo: {
@@ -15600,7 +15658,9 @@ function placesFor(config, opId) {
 
 /**
  * Wie viele Personen koennen an einem Platz dieses Arbeitsganges gleichzeitig
- * arbeiten? Bei Vormontage und Endkontrolle sind es zwei, sonst eine.
+ * arbeiten? Ueberall eine - auch bei Vormontage und Endkontrolle (bestaetigt
+ * von der Abteilungsleitung 19.09.2026: "2 Arbeitsplaetze und 2 Personen,
+ * pro Arbeitsplatz eine Person").
  * @param {any} config @param {string} opId
  */
 function workersPerPlace(config, opId) {
@@ -15609,6 +15669,37 @@ function workersPerPlace(config, opId) {
   const own = res.byOperation?.[opId]?.workersPerPlace;
   if (own != null && own !== '') return Math.max(0, Number(own));
   return 1;
+}
+
+/**
+ * Aushilfe an einem Arbeitsgang (Nutzeranforderung 25.09.2026: "notfalls
+ * als Helfer bei der Hydroprüfung oder Endkontrolle etc.").
+ *
+ * Sie hebt die PLATZgrenze, nicht die Mannschaft - eine zusaetzliche, nicht
+ * fuer diesen Arbeitsgang qualifizierte Person kann dort aushelfen und so
+ * zusaetzlichen Durchsatz schaffen, wenn sie sonst untaetig waere. Anders
+ * als die normale Besetzung ist sie KEIN Namensbudget in der Terminierung
+ * (siehe scheduler.js) - erst der Einsatzplan (assignment.js) weist ihr
+ * tatsaechlich eine Person zu.
+ *
+ * @param {any} config @param {string} opId
+ * @returns {{max:number, leistung:number, stundenfaktor:number, label:string, text:string}|null}
+ */
+function aushilfeVon(config, opId) {
+  const res = config.resources ?? {};
+  if (res.aushilfeAktiv === false) return null;
+  const a = res.byOperation?.[opId]?.aushilfe;
+  if (!a) return null;
+  const max = Math.max(0, Number(a.max ?? 0));
+  const leistung = Math.max(0, Number(a.leistung ?? 0));
+  if (max <= 0 || leistung <= 0) return null;
+  return {
+    max,
+    leistung,
+    stundenfaktor: Math.max(1, Number(a.stundenfaktor ?? 1)),
+    label: String(a.label ?? 'Aushilfe'),
+    text: String(a.text ?? ''),
+  };
 }
 
 /**
@@ -15768,7 +15859,8 @@ function poolHoursFor(config, date) {
  *   date:string, kind:string, headcount:any, productivity:number,
  *   hoursPerEmployee:number, poolHours:number, poolGross:number, mentoringHours:number,
  *   reserveHours:number, saturdayHeadcount:number|null,
- *   byOp: Record<string, {capUnits:number, capManHours:number, limiter:string, detail:any}>,
+ *   byOp: Record<string, {capUnits:number, capManHours:number, capOhneAushilfe:number,
+ *     aushilfeStundenfaktor:number, limiter:string, detail:any}>,
  *   resources: any
  * }}
  */
@@ -15915,6 +16007,29 @@ function dayCapacity(config, date) {
       }
     }
 
+    /*
+     * Aushilfe: Sie hebt die PLATZgrenze, nicht die Mannschaft.
+     *
+     * Deshalb steht sie hier ganz am Ende und wirkt nur, wenn der Platz
+     * die engste Stelle war. Begrenzt gerade die Mannschaft, der
+     * Materialtermin oder ein Prueftag, aendert eine Aushilfe nichts - und
+     * sie wird dann auch nicht ausgewiesen.
+     */
+    const hilfe = aushilfeVon(config, op.id);
+    const plaetzeBegrenzen = limiter === LIMITER.WORKPLACE || limiter === LIMITER.HYDRO_STATION
+      || limiter === LIMITER.BEIZ_STATION || limiter === LIMITER.HEFTPLATZ;
+    if (hilfe && plaetzeBegrenzen && capUnits > 0) {
+      const zusatz = hilfe.max * hilfe.leistung * opWindow * prod;
+      detail.aushilfe = {
+        label: hilfe.label,
+        text: hilfe.text,
+        einheiten: round2(zusatz),
+        stundenfaktor: hilfe.stundenfaktor,
+        ohneAushilfe: round2(capUnits),
+      };
+      capUnits += zusatz;
+    }
+
     // Wochentagsregel der Abteilung (siehe rules.js)
     const allowedDays = config.operationWeekdays?.[op.id];
     if (Array.isArray(allowedDays) && allowedDays.length > 0 && !allowedDays.includes(weekday(date))) {
@@ -15926,6 +16041,9 @@ function dayCapacity(config, date) {
     byOp[op.id] = {
       capUnits: round2(Math.max(0, capUnits)),
       capManHours: round2(Math.max(0, capUnits) * f),
+      /** Was OHNE Aushilfe moeglich waere - damit ist sie nachrechenbar. */
+      capOhneAushilfe: round2(Math.max(0, detail.aushilfe ? detail.aushilfe.ohneAushilfe : capUnits)),
+      aushilfeStundenfaktor: detail.aushilfe ? detail.aushilfe.stundenfaktor : 1,
       limiter,
       detail,
     };
@@ -15973,6 +16091,7 @@ function capacitySeries(config, dates) {
   __exports["operatingHours"] = operatingHours;
   __exports["placesFor"] = placesFor;
   __exports["workersPerPlace"] = workersPerPlace;
+  __exports["aushilfeVon"] = aushilfeVon;
   __exports["mentoringHoursPerDay"] = mentoringHoursPerDay;
   __exports["reserveHoursPerDay"] = reserveHoursPerDay;
   __exports["weldersFor"] = weldersFor;
@@ -16473,6 +16592,20 @@ function runSchedule(input) {
       poolRest: cap.poolHours,
       personRest, qualifiedIds,
       opRest: Object.fromEntries(Object.entries(cap.byOp).map(([k, v]) => [k, v.capUnits])),
+      /*
+       * Aushilfe (Nutzeranforderung 25.09.2026): wie viele Einheiten des
+       * heutigen opRest nur durch Aushilfe entstanden sind, und zu welchem
+       * Stundenfaktor sie kosten. Getrennt gehalten, weil eine Aushilfe-
+       * Einheit die Mannschaft mehr kostet als eine normale (siehe
+       * allocateProjectDay) - ohne die Trennung waere die Aushilfe
+       * geschenkt.
+       */
+      opAushilfe: Object.fromEntries(Object.entries(cap.byOp).map(([k, v]) => [
+        k, Math.max(0, (v.capUnits ?? 0) - (v.capOhneAushilfe ?? v.capUnits ?? 0)),
+      ])),
+      opAushilfeFaktor: Object.fromEntries(Object.entries(cap.byOp).map(([k, v]) => [
+        k, Number(v.aushilfeStundenfaktor ?? 1),
+      ])),
       maxWorkersProject, maxLead, targetLead,
     };
 
@@ -16670,6 +16803,9 @@ function newDayRecord(date, cap) {
       capUnits: c.capUnits, usedUnits: 0,
       capManHours: c.capManHours, usedManHours: 0,
       limiter: c.limiter,
+      /** Was OHNE Aushilfe moeglich waere - damit ist sie nachrechenbar. */
+      capOhneAushilfe: c.capOhneAushilfe ?? c.capUnits,
+      aushilfeUnits: 0, aushilfeManHours: 0,
     };
   }
   return rec;
@@ -16736,7 +16872,21 @@ function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
         ? qualIds.reduce((a, id) => a + Math.max(0, ctx.personRest[id] ?? 0), 0)
         : Infinity;
 
-      const poolUnits = ctx.poolRest / f;
+      /*
+       * Aushilfestunden kosten mehr: von Hand entgraten braucht fuer
+       * dieselbe Menge die doppelte Arbeitszeit. Der Poolvorrat muss
+       * deshalb zum TEUERSTEN Satz gerechnet werden, der an diesem
+       * Arbeitsgang heute noch greifen kann - sonst wuerde mehr zugeteilt,
+       * als die Mannschaft tragen kann.
+       *
+       * Aushilfe ist kein Namensbudget, sondern ein Platz-Mehraufwand
+       * (siehe capacity.js/aushilfeVon) - sie zaehlt deshalb NICHT gegen
+       * das Personen-Stundenkonto (Kritisch02), nur die normale Belegung.
+       */
+      const hilfeRest = ctx.opAushilfe?.[op.opId] ?? 0;
+      const hilfeFaktor = ctx.opAushilfeFaktor?.[op.opId] ?? 1;
+      const normalRest = Math.max(0, capOpUnits - hilfeRest);
+
       const personUnits = qualIds ? personCapRest / f : Infinity;
       const projectUnits = projectManRest / f;
       // Obergrenze je Arbeitsgang: sie gilt fuer den GANZEN Tag. Da ein Tag in
@@ -16748,27 +16898,50 @@ function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
           - (op.byDate[date] ?? 0))
         : Infinity;
 
+      /*
+       * Wie viel Arbeitsinhalt traegt der Poolvorrat noch? Erst der Platz
+       * zum normalen Satz, dann die Aushilfe zu ihrem teureren - sonst
+       * wuerde der billige Satz auch fuer die Aushilfe gelten und der Pool
+       * waere ueberzogen.
+       */
+      const normalMoeglich = Math.min(normalRest, ctx.poolRest / f, personUnits);
+      const poolNachNormal = Math.max(0, ctx.poolRest - normalMoeglich * f);
+      const hilfeMoeglich = Math.min(hilfeRest, poolNachNormal / (f * hilfeFaktor));
+      const poolUnits = normalMoeglich + hilfeMoeglich;
+
       const wanted = Math.min(op.remainingUnits, allow.units);
-      const granted = Math.max(0, Math.min(wanted, capOpUnits, poolUnits, personUnits, projectUnits, opWorkerUnits));
+      const granted = Math.max(0, Math.min(wanted, capOpUnits, poolUnits, projectUnits, opWorkerUnits));
       if (granted <= EPS) continue;
 
       // remainingUnits ist die fuehrende Groesse; doneUnits wird abgeleitet,
       // damit beide Werte nicht auseinanderlaufen koennen.
       op.remainingUnits = clampHours(op.remainingUnits - granted);
       op.doneUnits = op.totalUnits - op.remainingUnits;
-      const man = granted * f;
+      // Der Platz wird zuerst normal belegt, der Rest geht auf die
+      // Aushilfe - und die kostet ihren Stundenfaktor.
+      const ausNormal = Math.min(granted, normalRest);
+      const ausHilfe = Math.max(0, granted - ausNormal);
+      const man = ausNormal * f + ausHilfe * f * hilfeFaktor;
+      if (ausHilfe > EPS) {
+        ctx.opAushilfe[op.opId] = clampHours(hilfeRest - ausHilfe);
+        ctx.dayRecord.byOp[op.opId].aushilfeUnits = round2((ctx.dayRecord.byOp[op.opId].aushilfeUnits ?? 0) + ausHilfe);
+        ctx.dayRecord.byOp[op.opId].aushilfeManHours = round2(
+          (ctx.dayRecord.byOp[op.opId].aushilfeManHours ?? 0) + ausHilfe * f * hilfeFaktor,
+        );
+      }
       op.plannedManHours = round2(op.plannedManHours + man);
       op.byDate[date] = round2((op.byDate[date] ?? 0) + granted);
       op.firstDate ??= date;
       op.lastDate = date;
 
       /*
-       * FIX Kritisch02: das gemeinsame Personen-Stundenkonto verringern.
-       * Wer hier verplant ist, steht heute keinem anderen Arbeitsgang mehr
-       * zur Verfuegung - egal aus welchem Auftrag die naechste Anfrage kommt.
+       * FIX Kritisch02: das gemeinsame Personen-Stundenkonto um die
+       * NORMALE Belegung verringern (Aushilfe ist kein Namensbudget). Wer
+       * hier verplant ist, steht heute keinem anderen Arbeitsgang mehr zur
+       * Verfuegung - egal aus welchem Auftrag die naechste Anfrage kommt.
        */
-      if (qualIds && man > EPS) {
-        let restZuVerteilen = man;
+      if (qualIds && ausNormal > EPS) {
+        let restZuVerteilen = ausNormal * f;
         for (const id of qualIds) {
           if (restZuVerteilen <= EPS) break;
           const habenNoch = ctx.personRest[id] ?? 0;
@@ -16781,7 +16954,12 @@ function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
 
       ctx.poolRest = clampHours(ctx.poolRest - man);
       ctx.opRest[op.opId] = clampHours(capOpUnits - granted);
-      projectManRest = projectManRest === Infinity ? Infinity : clampHours(projectManRest - man);
+      /*
+       * Vom Auftrag geht nur der ARBEITSINHALT ab. Der Mehraufwand der
+       * Aushilfe kostet Arbeitszeit (Pool), macht den Auftrag aber nicht
+       * weiter fertig.
+       */
+      projectManRest = projectManRest === Infinity ? Infinity : clampHours(projectManRest - granted * f);
       usedTotal += man;
 
       ctx.dayRecord.poolUsed = round2(ctx.dayRecord.poolUsed + man);
@@ -17220,7 +17398,7 @@ __defs["engine/kpi.js"] = function (__exports, __req) {
  */
 
 const { OPERATIONS, OPERATION_BY_ID, PROJECT_STATUS, round1, round2 } = __req("engine/model.js");
-const { LIMITER, LIMITER_LABEL, poolHoursFor } = __req("engine/capacity.js");
+const { LIMITER, LIMITER_LABEL, poolHoursFor, aushilfeVon } = __req("engine/capacity.js");
 const { cmpDate, weekKey, addDays } = __req("engine/calendar.js");
 
 /**
@@ -17369,11 +17547,17 @@ function workplaceLoad(result, workplaces, weeks) {
     const places = countFor(type, op.id);
     if (places <= 0) continue;
     const machineFactor = op.id === 'ORBITAL' ? perWelder : 1;
+    /*
+     * Aushilfe (Nutzeranforderung 25.09.2026) hebt die Platzgrenze bewusst
+     * an diesem Arbeitsgang - sonst schiene die Auslastung hier ueber
+     * 100 %, obwohl genau dafuer die Aushilfe gedacht ist.
+     */
+    const hilfe = aushilfeVon(cfg, op.id);
 
     const cells = weeks.map((w) => {
       const used = (w.byOp[op.id]?.usedUnits ?? 0) * machineFactor;
       const fenster = moeglich[op.id]?.[w.weekKey] ?? { hours: 0, days: 0 };
-      const capacity = places * fenster.hours;
+      const capacity = places * fenster.hours + (hilfe ? hilfe.max * hilfe.leistung * fenster.hours : 0);
       const blocked = blockiert[op.id]?.[w.weekKey];
       return {
         weekKey: w.weekKey,
@@ -22514,9 +22698,61 @@ function assignPeople(result, config, range = {}) {
       const plaetzeJeSchicht = plaetzeAm(config, op.opId, day);
       /* So viele Schichten laeuft dieser Arbeitsgang */
       const opSchichten = Math.max(1, Math.floor(schichtenJeOp[op.opId] ?? 1));
+      /*
+       * Aushilfe (Nutzeranforderung 25.09.2026: "notfalls als Helfer bei
+       * der Hydroprüfung oder Endkontrolle etc."): wie viele Stunden die
+       * Terminierung heute an diesem Arbeitsgang bereits als Aushilfe
+       * eingepreist hat (engine/scheduler.js, engine/capacity.js/
+       * aushilfeVon). Dort ist es ein Platz-Mehraufwand ohne Namen - hier
+       * bekommt er einen: eine sonst untaetige Person deckt ihn, statt
+       * dass die Stunde als "Arbeit vergeben" liegen bleibt.
+       */
+      let hilfeRestHeute = day?.byOp?.[op.opId]?.aushilfeManHours ?? 0;
       for (const a of op.posten.sort((x, y) => y.manHours - x.manHours)) {
         let restStunden = a.manHours;
         const besetzt = (schluessel) => (personenAn[schluessel] ??= new Set());
+        /*
+         * Weist eine sonst KOMPLETT untaetige Person (heute noch nirgends
+         * eingeteilt) als Helfer zu - ohne die Qualifikationsmatrix fuer
+         * diesen Arbeitsgang, aber begrenzt auf das, was die Terminierung
+         * bereits als Aushilfe-Mehraufwand eingepreist hat (hilfeRestHeute,
+         * siehe capacity.js/aushilfeVon). Kein Ersatz fuer eine
+         * qualifizierte Person - nur der ausdrueckliche "notfalls"-Fall.
+         * @returns {boolean} ob eine Stunde gedeckt werden konnte
+         */
+        const versucheAushilfe = () => {
+          if (hilfeRestHeute <= 0.01 || restStunden <= 0.01) return false;
+          const frei = anwesend.filter((p) => !heuteAn[p.id]?.length && (rest[p.id] ?? 0) > 0.01);
+          if (frei.length === 0) return false;
+          frei.sort((x, y) => {
+            const lx = byPerson[x.id].hours / Math.max(0.1, byPerson[x.id].factor);
+            const ly = byPerson[y.id].hours / Math.max(0.1, byPerson[y.id].factor);
+            if (Math.abs(lx - ly) > 0.01) return lx - ly;
+            return x.id < y.id ? -1 : 1;
+          });
+          const p = frei[0];
+          const nimm = round2(Math.min(rest[p.id], restStunden, hilfeRestHeute));
+          if (nimm <= 0.01) return false;
+          (heuteAn[p.id] ??= []).push(a.opId);
+          rest[p.id] = round2(rest[p.id] - nimm);
+          restStunden = round2(restStunden - nimm);
+          hilfeRestHeute = round2(hilfeRestHeute - nimm);
+          eintraege.push({
+            personId: p.id, opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
+            projectId: a.projectId,
+            orderNo: projectName.get(a.projectId) ?? a.projectId,
+            hours: nimm,
+            schicht: schichtVon[p.id] ?? 1,
+            /** Ohne Qualifikationsmatrix, nur als Aushilfe eingesetzt */
+            helfer: true,
+          });
+          const bp = byPerson[p.id];
+          bp.hours = round2(bp.hours + nimm);
+          bp.byOp[a.opId] = round2((bp.byOp[a.opId] ?? 0) + nimm);
+          const wk = weekKey(date);
+          bp.byWeek[wk] = round2((bp.byWeek[wk] ?? 0) + nimm);
+          return true;
+        };
         while (restStunden > 0.01) {
           /*
            * Die Schicht mit den meisten freien Leuten zuerst. Die
@@ -22538,7 +22774,11 @@ function assignPeople(result, config, range = {}) {
             if (frei.length === 0) continue;
             if (beste === null || frei.length > beste.frei.length) beste = { sn, drauf, frei };
           }
-          if (beste === null) break;
+          if (beste === null) {
+            const gedeckt = versucheAushilfe();
+            if (!gedeckt) break;
+            continue;
+          }
           const drauf = beste.drauf;
           const koennen = beste.frei;
           /*
