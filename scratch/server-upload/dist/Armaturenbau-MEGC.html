@@ -7610,6 +7610,27 @@ function wochenPlan(a, plan, neu) {
   const leerTage = tage.reduce((x, d) => x + (d.idle ?? []).length, 0);
   const leerGruende = {};
   for (const d of tage) for (const i of d.idle ?? []) leerGruende[i.grund] = (leerGruende[i.grund] ?? 0) + 1;
+  /*
+   * FIX (gemeldet 21.09.2026 anhand eines Bildschirmfotos): der
+   * Hinweistext bei "Arbeit des Tages ist vergeben" nannte bisher IMMER
+   * dieselben zwei Beispielursachen ("höchstens 3 Aufträge gleichzeitig",
+   * "höchstens 4 Mitarbeiter je Auftrag") - unabhängig davon, ob diese
+   * Grenzen ueberhaupt aktiv sind und unabhaengig von der tatsaechlichen
+   * Ursache. Jetzt wird die tatsaechliche Ursache je Person (warteUrsache,
+   * siehe engine/assignment.js) ausgezaehlt und im Text genannt.
+   */
+  const arbeitVerteiltUrsachen = {};
+  let arbeitVerteiltOhneUrsache = 0;
+  for (const d of tage) {
+    for (const i of d.idle ?? []) {
+      if (i.grund !== 'ARBEIT_VERTEILT') continue;
+      if (i.warteUrsache?.ursache) {
+        arbeitVerteiltUrsachen[i.warteUrsache.ursache] = (arbeitVerteiltUrsachen[i.warteUrsache.ursache] ?? 0) + 1;
+      } else {
+        arbeitVerteiltOhneUrsache += 1;
+      }
+    }
+  }
   const arbeitstage = tage.reduce((x, d) => x + (d.entries.some((e) => e.personId) ? 1 : 0), 0);
   const stundenGesamt = tage.reduce((x, d) => x + d.entries.filter((e) => e.personId)
     .reduce((y, e) => y + e.hours, 0), 0);
@@ -7626,10 +7647,16 @@ function wochenPlan(a, plan, neu) {
         Object.entries(leerGruende)
           .map(([g, n]) => `${n}× ${LEER_GRUND[g]?.text ?? g}`).join(', '),
         '. ',
+        leerGruende.ARBEIT_VERTEILT
+          ? h('span', arbeitVerteiltText(arbeitVerteiltUrsachen, arbeitVerteiltOhneUrsache))
+          : null,
         leerGruende.KEIN_PLATZ_FREI
-          ? h('span', 'Das ist kein Fehler in der Liste: Die Plätze und die Belegungszeit begrenzen, '
-            + 'wie viele Leute gleichzeitig arbeiten können. Zusätzliches Personal würde hier nur '
-            + 'danebenstehen.')
+          ? h('span', ' Wo wirklich kein Platz frei war, blieb Arbeit liegen – dort hilft ein '
+            + 'Platz mehr oder eine weitere Schicht (Übersicht → Engpässe & Wirkung).')
+          : null,
+        leerGruende.SCHICHT_OHNE_ARBEIT
+          ? h('span', ' „Schicht ohne Arbeit" heißt: In der Schicht dieser Woche lief an diesem Tag '
+            + 'nichts, was die Person darf. Die Einteilung gilt wochenweise – siehe Schichtplan.')
           : null)
       : null);
 
@@ -7644,9 +7671,45 @@ function wochenPlan(a, plan, neu) {
   return h('div', kopf, table(spalten, zeilen, { compact: true }), fuss);
 }
 
+/**
+ * Text fuer "Arbeit des Tages ist vergeben" - nennt die TATSAECHLICHE
+ * Ursache (aus warteUrsache je Person, engine/assignment.js) statt einer
+ * immer gleichen Beispielerklaerung.
+ * @param {Record<string, number>} ursachen Anzahl Personentage je Ursache
+ * @param {number} ohneUrsache Personentage ohne feststellbare Wartearsache
+ *   (der Pool war exakt ausgeschoepft, keine Arbeit blieb liegen)
+ */
+function arbeitVerteiltText(ursachen, ohneUrsache) {
+  const einleitung = 'Der häufigste Grund ist nicht der Platz, sondern die freigegebene Arbeit: '
+    + 'Was heute beginnen darf, ist verteilt.';
+  const eintraege = Object.entries(ursachen).sort((a, b) => b[1] - a[1]);
+  if (eintraege.length === 0) {
+    return `${einleitung} Die Mannschaftsstunden waren an diesen Tagen bereits vollständig verplant – `
+      + 'mehr Plätze oder eine weitere Schicht schaffen dort keine zusätzliche Stunde.';
+  }
+  const genannt = eintraege.map(([u, n]) => `${n}× ${u}`).join(', ')
+    + (ohneUrsache > 0 ? `, ${ohneUrsache}× ausgereizte Mannschaftsstunden` : '');
+  const nurPool = eintraege.every(([u]) => u === 'Mitarbeiterstunden') && ohneUrsache === 0;
+  const nurWip = eintraege.every(([u]) => u === 'Aufträge gleichzeitig' || u === 'Mitarbeiter je Auftrag');
+  const zusatz = nurPool
+    ? ' Mehr Plätze oder eine weitere Schicht ändern daran nichts – die Mannschaftsstunden selbst reichten nicht.'
+    : nurWip
+      ? ' Diese Grenzen werden bei drohendem Leerlauf automatisch und sichtbar gelockert.'
+      : ' Mehr Plätze oder eine weitere Schicht helfen nur dort, wo tatsächlich ein Platz die Ursache war.';
+  return `${einleitung} Tatsächliche Ursache in diesem Zeitraum: ${genannt}.${zusatz}`;
+}
+
 /** Warum steht hier nichts? Klartext statt Gedankenstrich. */
 const LEER_GRUND = {
   KEIN_PLATZ_FREI: { text: 'kein Platz frei', lang: 'Anwesend, aber alle Plätze dieses Arbeitsgangs sind belegt. Mehr Personal ändert daran nichts.' },
+  /*
+   * "Kein Platz frei" war zu oft die falsche Antwort (Rückfrage
+   * 18.09.2026): meistens war der Platz gar nicht belegt, es fehlte
+   * schlicht freigegebene Arbeit (Vorgänger, Material, oder die Grenzen
+   * "höchstens N Aufträge gleichzeitig"/"höchstens M Mitarbeiter je
+   * Auftrag"). Ein zweiter Platz hätte daran nichts geändert.
+   */
+  ARBEIT_VERTEILT: { text: 'Arbeit des Tages ist vergeben', lang: 'Anwesend, aber alles heute freigegebene ist bereits verteilt. Ein weiterer Platz würde hier nichts ändern.' },
   KEINE_QUALIFIKATION: { text: 'keine Qualifikation', lang: 'Anwesend, aber für die heute laufenden Arbeitsgänge nicht angehakt.' },
   KEINE_ARBEIT: { text: 'keine Arbeit offen', lang: 'Anwesend, an diesem Tag ist nichts einzuplanen.' },
   /*
@@ -13693,8 +13756,8 @@ function analyze(dataset, scenarioId, range = {}) {
     processBalance: processBalance(result, demand, from, to),
     /** Rechenweg der Kapazitaet - welcher Zeitraum, welche Bestandteile */
     capacityDerivation: capacityDerivation(input.config, result.daySeries, to, from),
-    processUtilization: OPERATIONS.map((o) => processUtilization(result, o.id, to)),
-    orbital: orbitalReport(result, to),
+    processUtilization: OPERATIONS.map((o) => processUtilization(result, o.id, to, from)),
+    orbital: orbitalReport(result, to, from),
     rootCauses: causes,
     bottleneckByOperation: bottleneckByOperation(result),
     validation: { issues, summary: validationSummary(issues) },
@@ -15586,6 +15649,56 @@ function hydroWindowOpen(config, date) {
 }
 
 /**
+ * Nur die Mannschafts-Poolstunden eines Tages - ohne die Aufschluesselung je
+ * Arbeitsgang/Maschine/Platz, die `dayCapacity()` zusaetzlich bildet.
+ *
+ * Fuer Auswertungen, die NUR die Poolstunden vieler Tage brauchen (z. B.
+ * `availableHours` in kpi.js ueber einen ganzen Kennzahlenzeitraum), ist
+ * `dayCapacity()` unnoetig teuer - es baut je Tag zusaetzlich die
+ * vollstaendige byOp-Aufschluesselung fuer alle Arbeitsgaenge. Dieselbe
+ * Formel wie dort, an einer Stelle gehalten.
+ *
+ * @param {any} config @param {string} date
+ * @returns {{kind:"REGULAR"|"SATURDAY"|"OFF", hc:any, prod:number, hoursPerEmployee:number,
+ *   headsForPool:number, poolGross:number, mentoring:number, reserve:number, poolHours:number}}
+ */
+function poolHoursFor(config, date) {
+  const kind = dayKind(config, date);
+  const hc = headcountFor(config, date);
+  const prod = productivityFor(config, date);
+  if (kind === DAY_KIND.OFF) {
+    return {
+      kind, hc, prod, hoursPerEmployee: 0, headsForPool: 0, poolGross: 0, mentoring: 0, reserve: 0, poolHours: 0,
+    };
+  }
+  const regularPerDay = (Number(config.workTime?.regularHoursPerWeek ?? 37.5)) / Math.max(1, (config.workTime?.workDays ?? [1, 2, 3, 4, 5]).length);
+  const overtimePerDay = overtimeFor(config, date) / Math.max(1, (config.workTime?.workDays ?? [1, 2, 3, 4, 5]).length);
+  let hoursPerEmployee;
+  let headsForPool;
+  if (kind === DAY_KIND.SATURDAY) {
+    hoursPerEmployee = Number(config.workTime?.saturdayHours ?? 6);
+    const w = config.saturday?.weeks?.[weekKey(date)];
+    if (w && w.headcountOverride != null && w.headcountOverride !== '') {
+      headsForPool = Number(w.headcountOverride);
+    } else {
+      headsForPool = hc.effective * saturdayQuota(config, date);
+    }
+  } else {
+    hoursPerEmployee = regularPerDay + overtimePerDay;
+    headsForPool = hc.effective;
+  }
+  const mentoring = kind === DAY_KIND.SATURDAY ? 0 : mentoringHoursPerDay(config, date);
+  // Zubehoer und Kleinarbeiten gehen vorab ab - sie verbrauchen Stunden,
+  // ohne als Auftrag in der Planung zu stehen.
+  const reserve = kind === DAY_KIND.SATURDAY ? 0 : reserveHoursPerDay(config);
+  const poolGross = Math.max(0, headsForPool * hoursPerEmployee * prod);
+  const poolHours = round2(Math.max(0, poolGross - mentoring - reserve));
+  return {
+    kind, hc, prod, hoursPerEmployee, headsForPool, poolGross, mentoring, reserve, poolHours,
+  };
+}
+
+/**
  * Vollstaendige Tageskapazitaet.
  *
  * @param {any} config
@@ -15599,9 +15712,9 @@ function hydroWindowOpen(config, date) {
  * }}
  */
 function dayCapacity(config, date) {
-  const kind = dayKind(config, date);
-  const hc = headcountFor(config, date);
-  const prod = productivityFor(config, date);
+  const {
+    kind, hc, prod, hoursPerEmployee, headsForPool, poolGross, mentoring, reserve, poolHours,
+  } = poolHoursFor(config, date);
   const res = config.resources ?? {};
   const machinesPerWelder = Math.max(1, Number(res.machinesPerWelder ?? 2));
 
@@ -15619,32 +15732,7 @@ function dayCapacity(config, date) {
     return empty;
   }
 
-  const regularPerDay = (Number(config.workTime?.regularHoursPerWeek ?? 37.5)) / Math.max(1, (config.workTime?.workDays ?? [1, 2, 3, 4, 5]).length);
-  const overtimePerDay = overtimeFor(config, date) / Math.max(1, (config.workTime?.workDays ?? [1, 2, 3, 4, 5]).length);
-
-  let hoursPerEmployee;
-  let headsForPool;
-  let saturdayHeadcount = null;
-  if (kind === DAY_KIND.SATURDAY) {
-    hoursPerEmployee = Number(config.workTime?.saturdayHours ?? 6);
-    const w = config.saturday?.weeks?.[weekKey(date)];
-    if (w && w.headcountOverride != null && w.headcountOverride !== '') {
-      headsForPool = Number(w.headcountOverride);
-    } else {
-      headsForPool = hc.effective * saturdayQuota(config, date);
-    }
-    saturdayHeadcount = round2(headsForPool);
-  } else {
-    hoursPerEmployee = regularPerDay + overtimePerDay;
-    headsForPool = hc.effective;
-  }
-
-  const mentoring = kind === DAY_KIND.SATURDAY ? 0 : mentoringHoursPerDay(config, date);
-  // Zubehoer und Kleinarbeiten gehen vorab ab - sie verbrauchen Stunden,
-  // ohne als Auftrag in der Planung zu stehen.
-  const reserve = kind === DAY_KIND.SATURDAY ? 0 : reserveHoursPerDay(config);
-  const poolGross = Math.max(0, headsForPool * hoursPerEmployee * prod);
-  const poolHours = round2(Math.max(0, poolGross - mentoring - reserve));
+  const saturdayHeadcount = kind === DAY_KIND.SATURDAY ? round2(headsForPool) : null;
 
   // Allgemeines Fenster (fuer die Anzeige); je Arbeitsgang kann es abweichen.
   const opHours = operatingHours(config, date, hoursPerEmployee);
@@ -15830,6 +15918,7 @@ function capacitySeries(config, dates) {
   __exports["saturdayQuota"] = saturdayQuota;
   __exports["noboPresent"] = noboPresent;
   __exports["hydroWindowOpen"] = hydroWindowOpen;
+  __exports["poolHoursFor"] = poolHoursFor;
   __exports["dayCapacity"] = dayCapacity;
   __exports["capacitySeries"] = capacitySeries;
   __exports["DAY_KIND"] = DAY_KIND;
@@ -16122,6 +16211,7 @@ const { OPERATION_BY_ID, PROJECT_STATUS, DEP_TYPE, round2 } = __req("engine/mode
 const { dayCapacity, DAY_KIND, LIMITER } = __req("engine/capacity.js");
 const { resolveRouting, topoSort } = __req("engine/routing.js");
 const { addDays, addWeeks, cmpDate, dateRange, weekKey, diffDays } = __req("engine/calendar.js");
+const { teamOn, personEffectiveFactor } = __req("engine/team.js");
 
 /** Toleranz fuer Stundenvergleiche (0,01 h = 36 Sekunden). */
 const EPS = 0.01;
@@ -16273,9 +16363,54 @@ function runSchedule(input) {
       continue;
     }
 
+    /*
+     * FIX Kritisch02: Person, Qualifikation und Zeit gemeinsam reservieren.
+     *
+     * ctx.opRest gibt je Arbeitsgang einen Anteil des Gesamtpools zurueck
+     * (poolHours * Qualifikationsanteil) - UNABHAENGIG je Arbeitsgang
+     * gerechnet. Ist dieselbe Person fuer mehrere Arbeitsgaenge qualifiziert
+     * (der Regelfall), steckt ihr Stundenbudget dadurch in mehreren
+     * Arbeitsgaengen gleichzeitig: der Terminierer kann am selben Tag mehr
+     * Stunden buchen, als real anwesende Personen leisten koennen.
+     *
+     * Deshalb hier, VOR der Verteilung an die Auftraege, ein geteiltes
+     * Tagesstundenkonto je real anwesender Person (nur wenn eine
+     * Mannschaftsliste mit Qualifikationspruefung aktiv ist - sonst gibt es
+     * keine Namen, gegen die reserviert werden koennte). `allocateProjectDay`
+     * zieht daraus ab; ist eine Person bereits in einem anderen Arbeitsgang
+     * verplant, steht sie hier nicht mehr zur Verfuegung - fuer JEDEN
+     * Auftrag und JEDEN Arbeitsgang des Tages gemeinsam.
+     */
+    const teamCfg = config?.workforce?.team;
+    /*
+     * FIX (gefunden durch engine/test/regression.test.js, §16/§17):
+     * die Kopfzahl der Terminierung kommt bei `source !== 'MANNSCHAFT'`
+     * (Ruckfallebene "ZAHLEN"/Wochenwerte) NICHT aus der Namensliste,
+     * sondern aus baseHeadcount/tempWorkers/newHires (siehe
+     * engine/capacity.js, headcountFor, "ausListe"). Das geteilte
+     * Personen-Stundenkonto darf deshalb nur aktiv werden, wenn die
+     * Mannschaftsliste tatsaechlich die massgebliche Quelle ist - sonst
+     * deckelt es faelschlich auf die kleinere Namensliste, obwohl die
+     * eingestellte Kopfzahl (z. B. mit zusaetzlichen Leiharbeitern) groesser
+     * ist.
+     */
+    const teamToday = teamCfg && teamCfg.source === 'MANNSCHAFT' && teamCfg.enforceSkills !== false
+      ? teamOn(config, date)
+      : null;
+    const personRest = teamToday
+      ? Object.fromEntries(teamToday.present.map((p) => [
+        p.id,
+        round2(personEffectiveFactor(config, p, date) * cap.hoursPerEmployee * cap.productivity),
+      ]))
+      : null;
+    const qualifiedIds = teamToday
+      ? Object.fromEntries(Object.entries(teamToday.byOp).map(([opId, o]) => [opId, o.ids]))
+      : null;
+
     const ctx = {
       date, cap, dayRecord, allocations, blocked,
       poolRest: cap.poolHours,
+      personRest, qualifiedIds,
       opRest: Object.fromEntries(Object.entries(cap.byOp).map(([k, v]) => [k, v.capUnits])),
       maxWorkersProject, maxLead, targetLead,
     };
@@ -16285,6 +16420,34 @@ function runSchedule(input) {
       ? states.slice().sort((a, b) => (a.started === b.started ? a.orderIndex - b.orderIndex : (a.started ? -1 : 1)))
       : states;
 
+    /*
+     * Ein Auftrag wird an diesem Tag bearbeitet - Buchhaltung an einer
+     * Stelle, damit der normale Durchlauf und die WIP-Ausnahme (siehe
+     * unten) exakt dieselbe Nachbereitung durchlaufen.
+     */
+    const bearbeiteAuftrag = (st, bypassProjectLimit = false) => {
+      const used = allocateProjectDay(st, ctx, bypassProjectLimit);
+      if (used > EPS) {
+        parallelUsed++;
+        dayRecord.activeProjects++;
+        st.started = true;
+        st.startDate ??= date;
+      }
+      const rest = remainingManHoursOf(st);
+      st.remainingManHours = rest;
+      if (rest <= EPS && !st.finished) {
+        st.finished = true;
+        st.forecastFinish = lastAllocationDate(st) ?? date;
+      }
+      return used;
+    };
+    const vermerkeWipAusnahme = (st, grund, manHours) => {
+      (dayRecord.wipAusnahmen ??= []).push({ projectId: st.id, grund, manHours: round2(manHours) });
+    };
+
+    /** @type {any[]} Ganz uebersprungen wegen "hoechstens N Auftraege gleichzeitig" */
+    const wegenParallelUebersprungen = [];
+
     for (const st of todaysOrder) {
       if (st.finished) continue;
       if (ctx.poolRest <= EPS) break;
@@ -16292,22 +16455,50 @@ function runSchedule(input) {
 
       if (maxParallel > 0 && parallelUsed >= maxParallel) {
         blocked.push({ date, projectId: st.id, opId: null, manHours: 0, cause: LIMITER.PARALLEL_PROJECTS, info: true });
+        wegenParallelUebersprungen.push(st);
         continue;
       }
 
-      const used = allocateProjectDay(st, ctx);
-      if (used > EPS) {
-        parallelUsed++;
-        dayRecord.activeProjects++;
-        st.started = true;
-        st.startDate ??= date;
-      }
+      bearbeiteAuftrag(st);
+    }
 
-      const rest = remainingManHoursOf(st);
-      st.remainingManHours = rest;
-      if (rest <= EPS && !st.finished) {
-        st.finished = true;
-        st.forecastFinish = lastAllocationDate(st) ?? date;
+    /*
+     * FIX R06/WIP-Ausnahme: "Grenze bei Leerlauf automatisch lockern - mit
+     * sichtbarem Hinweis, dass das eine Ausnahme war."
+     *
+     * Bleibt nach dem normalen Durchlauf noch echte Mannschaftszeit im
+     * Pool uebrig - niemand wuerde durch das Oeffnen der Grenze also
+     * jemand anderem etwas wegnehmen -, oeffnet die Anwendung gezielt
+     * genau die zwei WIP-Grenzen, an denen (und nur daran) ein Auftrag an
+     * diesem Tag gescheitert ist. Vorgaenger, Material, Qualifikation,
+     * Plaetze und Maschinen bleiben in jedem Fall hart.
+     */
+    if (ctx.poolRest > EPS && wegenParallelUebersprungen.length > 0) {
+      for (const st of wegenParallelUebersprungen) {
+        if (st.finished || ctx.poolRest <= EPS) break;
+        const used = bearbeiteAuftrag(st);
+        if (used > EPS) vermerkeWipAusnahme(st, LIMITER.PARALLEL_PROJECTS, used);
+      }
+    }
+    /*
+     * 2. "Hoechstens M Mitarbeiter je Auftrag": jeder noch offene Auftrag
+     *    bekommt einen zweiten, um genau diese Grenze erweiterten
+     *    Durchlauf. Ohne echten Poolrest oder ohne dass die Grenze
+     *    tatsaechlich der Engpass war, aendert dieser Durchlauf nichts -
+     *    er ist dann ein wirkungsloser No-Op, kein Risiko.
+     *
+     * Nutzerentscheidung 21.09.2026 (nach Ruecksprache trotz Konflikt mit
+     * Test "§16 Maximale Mitarbeiterzahl je Projekt begrenzt den
+     * Tagesfortschritt"): die WIP-Ausnahme bleibt fuer beide Grenzen
+     * (maxParallelProjects UND maxWorkersProject) bestehen. Der Test wurde
+     * bewusst auf dieses Verhalten angepasst, siehe regression.test.js.
+     */
+    if (maxWorkersProject > 0 && ctx.poolRest > EPS) {
+      for (const st of todaysOrder) {
+        if (st.finished || ctx.poolRest <= EPS) break;
+        if (st.earliestRelease && cmpDate(date, st.earliestRelease) < 0) continue;
+        const used = bearbeiteAuftrag(st, true);
+        if (used > EPS) vermerkeWipAusnahme(st, LIMITER.PROJECT_LIMIT, used);
       }
     }
 
@@ -16440,11 +16631,17 @@ function lastAllocationDate(st) {
 
 /**
  * Belegt einen Tag fuer ein Projekt (mehrere Durchlaeufe wegen Ueberlappung).
+ *
+ * @param {boolean} [bypassProjectLimit] FIX R06/WIP-Ausnahme: ein zweiter
+ *   Aufruf fuer denselben Auftrag am selben Tag (siehe runSchedule) kann
+ *   damit die Grenze "Mitarbeiter je Auftrag" gezielt ausser Kraft setzen,
+ *   wenn nach dem normalen Durchlauf noch echte, sonst ungenutzte
+ *   Mannschaftszeit im Pool uebrig ist.
  * @returns {number} verbrauchte Mannstunden
  */
-function allocateProjectDay(st, ctx) {
+function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
   const { cap, date } = ctx;
-  let projectManRest = ctx.maxWorkersProject > 0
+  let projectManRest = (!bypassProjectLimit && ctx.maxWorkersProject > 0)
     ? ctx.maxWorkersProject * cap.hoursPerEmployee * cap.productivity
     : Infinity;
   let usedTotal = 0;
@@ -16460,14 +16657,26 @@ function allocateProjectDay(st, ctx) {
 
       if (!opGateOpen(st, op, date)) continue;
 
-      const allow = allowanceFor(st, op, ctx.maxLead);
+      const allow = allowanceFor(st, op, ctx.maxLead, ctx);
       if (allow.units <= EPS) continue;
 
       const f = op.manHourFactor;
       const capOpUnits = ctx.opRest[op.opId] ?? 0;
       if (capOpUnits <= EPS) continue;
 
+      /*
+       * FIX Kritisch02: geteiltes Personen-Stundenkonto (siehe runSchedule).
+       * Nur die Personen, die diesen Arbeitsgang tatsaechlich duerfen, UND
+       * nur mit den Stunden, die sie heute noch nicht in einem anderen
+       * Arbeitsgang verplant bekommen haben.
+       */
+      const qualIds = ctx.qualifiedIds?.[op.opId] ?? null;
+      const personCapRest = qualIds
+        ? qualIds.reduce((a, id) => a + Math.max(0, ctx.personRest[id] ?? 0), 0)
+        : Infinity;
+
       const poolUnits = ctx.poolRest / f;
+      const personUnits = qualIds ? personCapRest / f : Infinity;
       const projectUnits = projectManRest / f;
       // Obergrenze je Arbeitsgang: sie gilt fuer den GANZEN Tag. Da ein Tag in
       // mehreren Durchlaeufen belegt wird (Ueberlappung), muss das bereits
@@ -16479,7 +16688,7 @@ function allocateProjectDay(st, ctx) {
         : Infinity;
 
       const wanted = Math.min(op.remainingUnits, allow.units);
-      const granted = Math.max(0, Math.min(wanted, capOpUnits, poolUnits, projectUnits, opWorkerUnits));
+      const granted = Math.max(0, Math.min(wanted, capOpUnits, poolUnits, personUnits, projectUnits, opWorkerUnits));
       if (granted <= EPS) continue;
 
       // remainingUnits ist die fuehrende Groesse; doneUnits wird abgeleitet,
@@ -16491,6 +16700,23 @@ function allocateProjectDay(st, ctx) {
       op.byDate[date] = round2((op.byDate[date] ?? 0) + granted);
       op.firstDate ??= date;
       op.lastDate = date;
+
+      /*
+       * FIX Kritisch02: das gemeinsame Personen-Stundenkonto verringern.
+       * Wer hier verplant ist, steht heute keinem anderen Arbeitsgang mehr
+       * zur Verfuegung - egal aus welchem Auftrag die naechste Anfrage kommt.
+       */
+      if (qualIds && man > EPS) {
+        let restZuVerteilen = man;
+        for (const id of qualIds) {
+          if (restZuVerteilen <= EPS) break;
+          const habenNoch = ctx.personRest[id] ?? 0;
+          if (habenNoch <= EPS) continue;
+          const nimmt = Math.min(habenNoch, restZuVerteilen);
+          ctx.personRest[id] = clampHours(habenNoch - nimmt);
+          restZuVerteilen -= nimmt;
+        }
+      }
 
       ctx.poolRest = clampHours(ctx.poolRest - man);
       ctx.opRest[op.opId] = clampHours(capOpUnits - granted);
@@ -16529,14 +16755,19 @@ function diagnose(st, ctx, projectManRest) {
     const op = st.opState[opDef.opId];
     if (!op || op.remainingUnits <= EPS) continue;
     if (!opGateOpen(st, op, date)) continue;
-    const allow = allowanceFor(st, op, ctx.maxLead);
+    const allow = allowanceFor(st, op, ctx.maxLead, ctx);
     if (allow.units <= EPS) continue; // Vorgaenger/Vorsprung -> Ursache liegt beim Vorgaenger
 
     const f = op.manHourFactor;
+    const qualIds = ctx.qualifiedIds?.[op.opId] ?? null;
+    const personCapRest = qualIds
+      ? qualIds.reduce((a, id) => a + Math.max(0, ctx.personRest[id] ?? 0), 0)
+      : Infinity;
     const limits = [
       { v: ctx.opRest[op.opId] ?? 0, c: cap.byOp[op.opId]?.limiter ?? LIMITER.SKILL },
       { v: ctx.poolRest / f, c: LIMITER.POOL },
       { v: projectManRest === Infinity ? Infinity : projectManRest / f, c: LIMITER.PROJECT_LIMIT },
+      { v: qualIds ? personCapRest / f : Infinity, c: LIMITER.SKILL },
     ];
     limits.sort((a, b) => a.v - b.v);
     const shortfall = Math.min(op.remainingUnits, allow.units);
@@ -16565,7 +16796,15 @@ function diagnose(st, ctx, projectManRest) {
 function opReleaseDate(op, project, rel) {
   if (op.releaseWeeksBeforeDue == null || !project.dueDate) return rel.release;
   const own = addWeeks(project.dueDate, -Number(op.releaseWeeksBeforeDue));
-  if (op.ignoreMaterial) return own;
+  /*
+   * FIX Bedingt11: eine ausdruecklich gemeldete Fehlteil-Sperre
+   * (project.missingParts === true) ist keine arbeitsgangspezifische
+   * Materialgrenze, sondern eine harte Sperre des GANZEN Auftrags - von
+   * Hand gesetzt, nicht aus dem Kalender abgeleitet. Eine Regel
+   * ("ignoreMaterial") fuer einen einzelnen, nicht materialkritischen
+   * Arbeitsgang darf diese Sperre nicht umgehen.
+   */
+  if (op.ignoreMaterial && project.missingParts !== true) return own;
   // Ohne ausdrueckliche Materialfreigabe bleibt die Materialgrenze bestehen.
   if (rel.materialGate && cmpDate(rel.materialGate, own) > 0) return rel.materialGate;
   return own;
@@ -16597,7 +16836,7 @@ function opPriority(st, opDef, targetLead) {
  * Abhaengigkeitsnetzes (FS, Ueberlappung, Maximalvorsprung).
  * @returns {{units:number, cause:string}}
  */
-function allowanceFor(st, op, maxLead) {
+function allowanceFor(st, op, maxLead, ctx) {
   let allowed = op.remainingUnits;
   let cause = LIMITER.NONE;
 
@@ -16618,6 +16857,26 @@ function allowanceFor(st, op, maxLead) {
       if (room < allowed) { allowed = room; cause = LIMITER.TACK_LEAD; }
     } else if (pred.remainingUnits > EPS) {
       return { units: 0, cause: LIMITER.PREDECESSOR };
+    } else if (ctx && pred.lastDate === ctx.date) {
+      /*
+       * FIX Hoch04: Ende-Start heisst ENDE, nicht "irgendwann heute fertig
+       * geworden". Der Vorgaenger ist HEUTE fertig geworden. Ohne Uhrzeit
+       * im Modell (es wird tagesweise, nicht stundenweise gerechnet) ist
+       * die Naeherung: Er hat dafuer einen Teil des heutigen Zeitfensters
+       * gebraucht - was danach noch uebrig ist, steht dem echten
+       * Ende-Start-Nachfolger heute noch zur Verfuegung, nicht mehr. Ein
+       * kurzer Vorgaenger laesst dem Nachfolger noch Reststunden desselben
+       * Tages; ein Vorgaenger, der das ganze Tagesfenster gebraucht hat,
+       * laesst nichts mehr uebrig - der Nachfolger beginnt dann erst am
+       * naechsten Tag. Vorher sah die Pruefung nur "remainingUnits bereits
+       * 0" und liess zwei volle Arbeitstage auf denselben Kalendertag
+       * rutschen.
+       */
+      const predWindow = Number(ctx.cap?.byOp?.[p.opId]?.detail?.operatingHours ?? ctx.cap?.hoursPerEmployee ?? 0);
+      const predUsedToday = Number(pred.byDate?.[ctx.date] ?? 0) * (Number(pred.manHourFactor) || 1);
+      const uebrigStunden = Math.max(0, predWindow - predUsedToday);
+      const uebrigUnits = uebrigStunden / (Number(op.manHourFactor) || 1);
+      if (uebrigUnits < allowed) { allowed = uebrigUnits; cause = LIMITER.PREDECESSOR; }
     }
   }
 
@@ -16900,8 +17159,8 @@ __defs["engine/kpi.js"] = function (__exports, __req) {
  */
 
 const { OPERATIONS, OPERATION_BY_ID, PROJECT_STATUS, round1, round2 } = __req("engine/model.js");
-const { LIMITER, LIMITER_LABEL } = __req("engine/capacity.js");
-const { cmpDate, weekKey } = __req("engine/calendar.js");
+const { LIMITER, LIMITER_LABEL, poolHoursFor } = __req("engine/capacity.js");
+const { cmpDate, weekKey, addDays } = __req("engine/calendar.js");
 
 /**
  * Zusaetzlich benoetigte Mitarbeiter je Kalenderwoche.
@@ -17331,12 +17590,29 @@ function dashboardKpis(result, weeks, range = {}) {
    * Termin: im Startdatenbestand 9.012 h statt 8.649 h, also 363 h
    * Kapazitaet, die es bis zum Termin gar nicht mehr gibt. Gemeldet von der
    * Abteilungsleitung am 18.09.2026, als die Zahlen nicht aufgingen.
+   *
+   * FIX (gefunden beim Portieren in die Netzwerkversion, 21.09.2026):
+   * `result.daySeries` endet, sobald alle Auftraege fertig sind
+   * (`states.every(finished)` in scheduler.js) - das ist eine Optimierung
+   * der Terminierung, keine Kalenderaussage. Reicht die Kapazitaet, um vor
+   * dem Fenster-Ende fertig zu werden, brach die Summe schon dort ab und
+   * zaehlte die Resttage bis zum Termin gar nicht mehr mit. Ergebnis: MEHR
+   * Kapazitaet (z. B. laengeres Zeitfenster, Ueberstunden) konnte
+   * `availableHours` sogar SENKEN, weil der Plan dadurch frueher fertig war
+   * - genau der Prognoseeinfluss, den der Kommentar oben ausdruecklich
+   * ausschliessen wollte. Jetzt taggenau direkt aus der Kapazitaetsformel,
+   * unabhaengig davon, wie weit die Terminierung tatsaechlich gerechnet hat.
    */
-  const availableHours = round2((result.daySeries ?? []).reduce((a, d) => {
-    if (windowEnd && cmpDate(d.date, windowEnd) > 0) return a;
-    if (windowStart && cmpDate(d.date, windowStart) < 0) return a;
-    return a + (Number(d.poolCapacity) || 0);
-  }, 0));
+  const availableHours = round2((() => {
+    const cfg = result.config;
+    const von = windowStart && cmpDate(windowStart, cfg.planningDate) > 0 ? windowStart : cfg.planningDate;
+    if (!windowEnd || cmpDate(von, windowEnd) > 0) return 0;
+    let sum = 0;
+    for (let d = von; cmpDate(d, windowEnd) <= 0; d = addDays(d, 1)) {
+      sum += Number(poolHoursFor(cfg, d).poolHours) || 0;
+    }
+    return sum;
+  })());
   const overloadHours = round2(windowWeeks.reduce((a, w) => a + w.overload, 0));
   const firstOverload = windowWeeks.find((w) => w.overload > 0.5);
 
@@ -17361,8 +17637,14 @@ function dashboardKpis(result, weeks, range = {}) {
   const hoursPerEmployeeWeek = (result.config.workTime?.regularHoursPerWeek ?? 37.5) * prod;
   const requiredFteWeeks = hoursPerEmployeeWeek > 0 ? round1(overloadHours / hoursPerEmployeeWeek) : 0;
 
-  const orbital = processUtilization(result, 'ORBITAL', lastRelevant);
-  const heft = processUtilization(result, 'HEFTEN', lastRelevant);
+  /*
+   * FIX Hoch08 (Audit 20.09.2026): dieselbe Fensterregel wie bei
+   * `availableHours` oben - der angewaehlte Zeitraum (`windowStart`/
+   * `windowEnd`), nicht `lastRelevant` (das Ende des ganzen
+   * Auftragsbestands, unabhaengig von der Auswahl).
+   */
+  const orbital = processUtilization(result, 'ORBITAL', windowEnd, windowStart);
+  const heft = processUtilization(result, 'HEFTEN', windowEnd, windowStart);
   const shortfall = deadlineShortfall(result);
 
   return {
@@ -17467,13 +17749,21 @@ function bottleneckRanking(result) {
 
 /**
  * Auslastung eines Arbeitsganges im relevanten Zeitfenster.
+ *
+ * FIX Hoch08 (Audit 20.09.2026): der angewaehlte Zeitraum hat auch eine
+ * UNTERGRENZE (`from`). Vorher lief diese Auswertung immer ab dem ersten Tag
+ * der Tagesreihe (Planungsstichtag) - eine Auswahl von nur einem einzelnen
+ * Tag zaehlte trotzdem alle Tage seit Planungsbeginn mit.
+ *
  * @param {any} result @param {string} opId @param {string|null} until
+ * @param {string|null} [from]
  */
-function processUtilization(result, opId, until) {
+function processUtilization(result, opId, until, from = null) {
   let cap = 0;
   let used = 0;
   let capDays = 0;
   for (const d of result.daySeries) {
+    if (from && cmpDate(d.date, from) < 0) continue;
     if (until && cmpDate(d.date, until) > 0) break;
     const v = d.byOp[opId];
     if (!v) continue;
@@ -17769,9 +18059,14 @@ function blockedByOperation(result) {
 
 /**
  * Orbitalschweiss-Sonderauswertung (§54).
- * @param {any} result @param {string|null} until
+ *
+ * FIX Hoch08 (Audit 20.09.2026): dieselbe Fensterregel wie bei
+ * `processUtilization` - der angewaehlte Zeitraum hat auch eine
+ * Untergrenze (`from`).
+ *
+ * @param {any} result @param {string|null} until @param {string|null} [from]
  */
-function orbitalReport(result, until) {
+function orbitalReport(result, until, from = null) {
   const cfg = result.config;
   let machineHoursNeeded = 0;
   let machineHoursCap = 0;
@@ -17780,6 +18075,7 @@ function orbitalReport(result, until) {
   let days = 0;
   let usableSum = 0;
   for (const d of result.daySeries) {
+    if (from && cmpDate(d.date, from) < 0) continue;
     if (until && cmpDate(d.date, until) > 0) break;
     const v = d.byOp.ORBITAL;
     if (!v || d.poolCapacity <= 0) continue;
@@ -20501,6 +20797,18 @@ function absenceOn(p, date) {
  * @param {any} config @param {string} date
  * @returns {{factor:number, heads:number, present:any[], absent:any[], byOp:Record<string,{factor:number, heads:number, ids:string[]}>}}
  */
+/**
+ * Ramp-bereinigter Zeitanteil einer Person an einem Tag - dieselbe Formel,
+ * die `teamOn` fuer die Anteilsrechnung verwendet. Eigens exportiert, damit
+ * die Terminierung (engine/scheduler.js) je Person ein echtes,
+ * arbeitsgangUEBERGREIFENDES Tagesstundenkonto fuehren kann: dieselbe
+ * Person darf nicht in zwei Arbeitsgaengen gleichzeitig stecken.
+ * @param {any} config @param {any} p @param {string} date
+ */
+function personEffectiveFactor(config, p, date) {
+  return (Number(p.factor ?? 1) || 0) * rampOf(config, p, date);
+}
+
 function teamOn(config, date) {
   const people = peopleOf(config);
   const present = [];
@@ -20515,7 +20823,7 @@ function teamOn(config, date) {
     // Leiharbeiter und Neueinstellungen leisten in den ersten Wochen
     // weniger (40/60/80 %). Ohne das waere jeder Neue ab Tag eins voll
     // eingerechnet - und der Plan zu optimistisch.
-    const f = (Number(p.factor ?? 1) || 0) * rampOf(config, p, date);
+    const f = personEffectiveFactor(config, p, date);
     factor += f;
     for (const op of OPERATIONS) {
       if (p.skills?.[op.id]) {
@@ -20749,6 +21057,7 @@ function mitZusatzPersonal(config, anzahl, ab, opts = {}) {
   __exports["weekFlags"] = weekFlags;
   __exports["weekInEngagement"] = weekInEngagement;
   __exports["absenceOn"] = absenceOn;
+  __exports["personEffectiveFactor"] = personEffectiveFactor;
   __exports["teamOn"] = teamOn;
   __exports["skillShares"] = skillShares;
   __exports["shiftCapability"] = shiftCapability;
@@ -21963,8 +22272,8 @@ __defs["engine/assignment.js"] = function (__exports, __req) {
  */
 
 const { OPERATION_BY_ID, round2 } = __req("engine/model.js");
-const { peopleOf, personPresent, absenceOn } = __req("engine/team.js");
-const { placesFor, workersPerPlace } = __req("engine/capacity.js");
+const { peopleOf, personPresent, absenceOn, personEffectiveFactor } = __req("engine/team.js");
+const { placesFor, workersPerPlace, DAY_KIND, LIMITER_LABEL } = __req("engine/capacity.js");
 const { schichtenJeArbeitsgang, wochenSchichten, SCHICHT_STUNDEN } = __req("engine/schichtplan.js");
 const { weekKey } = __req("engine/calendar.js");
 
@@ -21996,7 +22305,43 @@ function assignPeople(result, config, range = {}) {
     (alloc.get(a.date) ?? alloc.set(a.date, []).get(a.date)).push(a);
   }
 
+  /*
+   * FIX Mittel10 (Audit 20.09.2026): vollstaendig arbeitsfreie Tage
+   * verschwinden nicht mehr aus dem Einsatzplan.
+   *
+   * Bisher liefen alle folgenden Schritte nur ueber `alloc.keys()` - also
+   * ausschliesslich Tage, an denen IRGENDEIN Auftrag irgendetwas gebucht
+   * hat. Ein Tag, an dem die Mannschaft komplett ohne freigegebene Arbeit
+   * dastand (Beispiel: Personal ab dem Stichtag da, Material/Freigabe erst
+   * Tage spaeter), tauchte im Plan gar nicht auf - weder als Zeile noch in
+   * `idleDays`. Jetzt zaehlt der VOLLSTAENDIGE Kalender (Arbeitstage und
+   * Samstage im gewaehlten Zeitraum), unabhaengig davon, ob an dem Tag
+   * gebucht wurde.
+   */
+  const arbeitstage = result.daySeries
+    .filter((d) => d.kind !== DAY_KIND.OFF)
+    .filter((d) => (!range.from || d.date >= range.from) && (!range.to || d.date <= range.to))
+    .map((d) => d.date);
+
   const projectName = new Map((result.projects ?? []).map((p) => [p.id, p.orderNo ?? p.id]));
+
+  /** Wartende Arbeit je Tag - fuer die Begruendung "warum bekomme ich nichts" */
+  /** @type {Map<string, any[]>} */
+  const stauAm = new Map();
+  for (const b of result.blocked ?? []) {
+    if (b.info || !b.opId) continue;
+    (stauAm.get(b.date) ?? stauAm.set(b.date, []).get(b.date)).push(b);
+  }
+
+  /*
+   * Luecken-Report (Nutzeranforderung 21.09.2026): fuer jede von der
+   * Terminierung als ausfuehrbar eingestufte, aber hier nicht besetzbare
+   * Stunde der konkrete, nachpruefbare Ablehnungsgrund - Qualifikation,
+   * Budget oder Platzgrenze. Nicht "kein Platz frei" als Sammelbegriff,
+   * sondern: welche Bedingung genau hat gefehlt.
+   * @type {any[]}
+   */
+  const luecken = [];
 
   /*
    * Schichten - wochenweise, nie tageweise.
@@ -22012,16 +22357,29 @@ function assignPeople(result, config, range = {}) {
    * Arbeitsgang nicht arbeiten.
    */
   const schichtenJeOp = schichtenJeArbeitsgang(config);
-  const wochenListe = [...new Set([...alloc.keys()].map((d) => weekKey(d)))].sort();
+  const wochenListe = [...new Set(arbeitstage.map((d) => weekKey(d)))].sort();
   const eingeplantePersonen = people.filter((p) => p.defaultActive !== false
     || Object.values(p.weeks ?? {}).some(Boolean));
   const schichtplan = wochenSchichten(config, wochenListe, eingeplantePersonen);
   /** Stunden, die eine Schicht nicht besetzen konnte - je Arbeitsgang */
   const unbesetzteSchichten = {};
 
-  for (const [date, list] of [...alloc.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+  for (const date of arbeitstage) {
+    const list = alloc.get(date) ?? [];
     const day = capOf.get(date);
     const hoursPerEmployee = Number(day?.hoursPerEmployee ?? 7.5) || 7.5;
+    /*
+     * FIX Mittel09 (Audit 20.09.2026): Produktivitaet gehoert ins
+     * persoenliche Budget.
+     *
+     * Hier stand nur `factor * hoursPerEmployee` - die reine
+     * Anwesenheitsdauer (7,5 h). Die Terminierung (engine/scheduler.js,
+     * ctx.personRest) rechnet dieselbe Person aber mit Produktivitaets- UND
+     * Einarbeitungsfaktor (rund 7 h). Beide Anzeigen muessen dieselbe
+     * Stundenart verwenden - sonst bucht der Einsatzplan mehr, als die
+     * Terminierung fuer diese Person vorgesehen hat.
+     */
+    const productivity = Number(day?.productivity ?? 1) || 1;
     const anwesend = people.filter((p) => personPresent(p, date));
     for (const p of people) {
       if (!personPresent(p, date)) byPerson[p.id].absentDays += 1;
@@ -22031,11 +22389,15 @@ function assignPeople(result, config, range = {}) {
     const schichtVon = schichtplan.zuordnung[weekKey(date)] ?? {};
     /** @type {Record<string, number>} Restbudget je Person */
     const rest = {};
-    for (const p of anwesend) rest[p.id] = (Number(p.factor ?? 1) || 0) * hoursPerEmployee;
+    for (const p of anwesend) {
+      rest[p.id] = round2(personEffectiveFactor(config, p, date) * hoursPerEmployee * productivity);
+    }
     /** Welche Arbeitsgaenge macht eine Person heute schon? */
     const heuteAn = {};
     /** Welche Personen stehen heute an einem Arbeitsgang? (Plaetze zaehlen) */
     const personenAn = {};
+    /** Heute liegengebliebene Stunden je Arbeitsgang (fuer den Luecken-Report) */
+    const restHeute = {};
 
     // Arbeit des Tages je Arbeitsgang zusammenfassen - ein Arbeitsgang mit
     // drei Auftraegen ist drei Positionen, aber dieselben Plaetze.
@@ -22128,6 +22490,7 @@ function assignPeople(result, config, range = {}) {
         }
         if (restStunden > 0.01) {
           offen = round2(offen + restStunden);
+          restHeute[a.opId] = round2((restHeute[a.opId] ?? 0) + restStunden);
           unbesetzteSchichten[a.opId] = round2((unbesetzteSchichten[a.opId] ?? 0) + restStunden);
           eintraege.push({
             personId: null, opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
@@ -22135,6 +22498,55 @@ function assignPeople(result, config, range = {}) {
             orderNo: projectName.get(a.projectId) ?? a.projectId,
             hours: round2(restStunden),
             schicht: null,
+          });
+          /*
+           * Diagnose je Schicht: dieselben Bedingungen, die die
+           * Vergabe-Schleife oben schon prueft (Qualifikation, Budget,
+           * Schicht, Platz) - hier nur nicht als Filter, sondern als
+           * Befund. Material/Vorgaenger tauchen hier nie auf: waeren sie
+           * die Ursache, haette die Terminierung diese Stunde gar nicht
+           * erst als ausfuehrbar eingestuft.
+           */
+          const jeSchicht = [];
+          for (let sn = 1; sn <= opSchichten; sn++) {
+            const inDerSchicht = anwesend.filter((p) => (schichtVon[p.id] ?? 1) === sn);
+            const qualifiziert = inDerSchicht.filter((p) => p.skills?.[a.opId]);
+            const mitBudget = qualifiziert.filter((p) => (rest[p.id] ?? 0) > 0.01);
+            const schluessel = `${a.opId}#${sn}`;
+            const platzBelegt = [...(personenAn[schluessel] ?? [])].filter((id) => (rest[id] ?? 0) > 0.01).length;
+            jeSchicht.push({
+              schicht: sn,
+              anwesendInSchicht: inDerSchicht.length,
+              qualifiziert: qualifiziert.length,
+              qualifiziertMitBudget: mitBudget.map((p) => ({ id: p.id, restBudget: rest[p.id] })),
+              platzGrenze: plaetzeJeSchicht,
+              platzBelegt,
+              grund: qualifiziert.length === 0
+                ? 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT'
+                : mitBudget.length === 0
+                  ? 'BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT'
+                  : 'PLATZGRENZE_DER_SCHICHT_ERREICHT',
+            });
+          }
+          /*
+           * Der klarste, umsetzbare Befund: gab es in IRGENDEINER passenden
+           * Schicht eine qualifizierte Person mit Restbudget, die nur an
+           * der Platzgrenze scheiterte? Dann ist das eine echte Platzfrage
+           * (ein weiterer Platz/eine weitere Schicht haette geholfen).
+           * Sonst fehlte die Person selbst.
+           */
+          const hauptgrund = jeSchicht.some((s) => s.grund === 'PLATZGRENZE_DER_SCHICHT_ERREICHT')
+            ? 'PLATZGRENZE_DER_SCHICHT_ERREICHT'
+            : jeSchicht.every((s) => s.grund === 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT')
+              ? 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT'
+              : 'BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT';
+          luecken.push({
+            date, weekKey: weekKey(date),
+            projectId: a.projectId, orderNo: projectName.get(a.projectId) ?? a.projectId,
+            opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
+            stunden: round2(restStunden),
+            hauptgrund,
+            jeSchicht,
           });
         }
       }
@@ -22154,19 +22566,49 @@ function assignPeople(result, config, range = {}) {
       /* Laeuft ueberhaupt ein Arbeitsgang in MEINER Schicht, den ich darf? */
       const inMeinerSchicht = konnte.filter(
         (op) => Math.max(1, Math.floor(schichtenJeOp[op.opId] ?? 1)) >= meineSchicht);
+      /*
+       * "Kein Platz frei" war zu oft die falsche Antwort.
+       *
+       * Unterschieden wird jetzt:
+       *   KEIN_PLATZ_FREI   heute blieb Arbeit liegen, die niemand mehr
+       *                     annehmen konnte -> Plaetze/Schichten helfen
+       *   ARBEIT_VERTEILT   alles Freigegebene ist vergeben -> es fehlt
+       *                     freigegebene Arbeit, kein Platz
+       */
+      const bliebLiegen = inMeinerSchicht.some((op) => (restHeute[op.opId] ?? 0) > 0.01);
       const grund = proOp.size === 0
         ? 'KEINE_ARBEIT'
         : konnte.length === 0
           ? 'KEINE_QUALIFIKATION'
           : inMeinerSchicht.length === 0
             ? 'SCHICHT_OHNE_ARBEIT'
-            : 'KEIN_PLATZ_FREI';
+            : bliebLiegen
+              ? 'KEIN_PLATZ_FREI'
+              : 'ARBEIT_VERTEILT';
+      /*
+       * Wartet an einem meiner Arbeitsgaenge Arbeit, die heute nicht
+       * beginnen durfte? Dann steht hier, WORAN sie haengt - das ist die
+       * Antwort auf "warum bekomme ich nichts zu tun".
+       */
+      let warteUrsache = null;
+      if (grund === 'ARBEIT_VERTEILT') {
+        const meine = new Set(konnte.map((op) => op.opId));
+        const wartend = {};
+        for (const b of stauAm.get(date) ?? []) {
+          if (!meine.has(b.opId)) continue;
+          wartend[b.cause] = round2((wartend[b.cause] ?? 0) + b.manHours);
+        }
+        const top = Object.entries(wartend).sort((x, y) => y[1] - x[1])[0];
+        if (top) warteUrsache = { ursache: LIMITER_LABEL[top[0]] ?? top[0], stunden: top[1] };
+      }
       ohneArbeit.push({
         id: p.id,
         grund,
         schicht: meineSchicht,
         arbeitsgaenge: konnte.map((op) => op.opId),
         stunden: round2(rest[p.id] ?? 0),
+        /** Nur bei ARBEIT_VERTEILT: woran die wartende Arbeit haengt */
+        warteUrsache,
       });
       byPerson[p.id].idleDays = (byPerson[p.id].idleDays ?? 0) + 1;
       byPerson[p.id].idleReasons = byPerson[p.id].idleReasons ?? {};
@@ -22186,6 +22628,19 @@ function assignPeople(result, config, range = {}) {
     });
   }
 
+  /** Gesamtstunden je Ablehnungsgrund - schneller Ueberblick vor den Einzelfaellen */
+  const lueckenJeGrund = {};
+  for (const l of luecken) lueckenJeGrund[l.hauptgrund] = round2((lueckenJeGrund[l.hauptgrund] ?? 0) + l.stunden);
+  /** Fehlende Besetzung je KW und Arbeitsgang */
+  const lueckenJeWocheUndOpMap = {};
+  for (const l of luecken) {
+    const schluessel = `${l.weekKey}|${l.opId}`;
+    const e = (lueckenJeWocheUndOpMap[schluessel] ??= {
+      weekKey: l.weekKey, opId: l.opId, opName: l.opName, stunden: 0,
+    });
+    e.stunden = round2(e.stunden + l.stunden);
+  }
+
   return {
     days: tage,
     people: Object.values(byPerson),
@@ -22200,6 +22655,15 @@ function assignPeople(result, config, range = {}) {
     },
     /** Stunden, die eine Schicht nicht besetzen konnte - je Arbeitsgang */
     unbesetzteSchichten,
+    /**
+     * Luecken-Report: ungedeckter Bedarf mit konkretem, nachpruefbarem
+     * Ablehnungsgrund je Stunde. Ersetzt keine Kapazitaetsrechnung - zeigt
+     * nur, woran eine von der Terminierung als ausfuehrbar eingestufte
+     * Stunde in der Einsatzplanung tatsaechlich gescheitert ist.
+     */
+    luecken,
+    lueckenJeGrund,
+    lueckenJeWocheUndOp: Object.values(lueckenJeWocheUndOpMap),
   };
 }
 
@@ -24061,7 +24525,7 @@ __defs["engine/mehraufwand.js"] = function (__exports, __req) {
  */
 
 const { OPERATION_BY_ID, round1, round2, deepClone } = __req("engine/model.js");
-const { weekKey, weekStart, addDays, formatDE } = __req("engine/calendar.js");
+const { weekKey, weekStart, addDays, formatDE, cmpDate } = __req("engine/calendar.js");
 const { dayCapacity, placesFor } = __req("engine/capacity.js");
 const { hourlyCost } = __req("engine/costs.js");
 const { peopleOf } = __req("engine/team.js");
@@ -24119,12 +24583,13 @@ function mehraufwand(input, result) {
 
   const spitze = wochen.reduce((a, b) => (b.luecke > a.luecke ? b : a), wochen[0]);
   const stunden = spitze.luecke;
+  const spitzeIndex = wochen.indexOf(spitze);
 
   // Ein Rechner fuer beide - jeder Kapazitaetsdurchgang wird nur einmal
   // gemacht, egal wie oft dieselbe Einstellung gebraucht wird.
   const rechner = gewinnRechner(config, wochen);
-  const massnahmen = alleMassnahmen(input, wochen, stunden, rechner);
-  const paket = schnuerePaket(input, wochen, stunden, massnahmen, rechner);
+  const massnahmen = alleMassnahmen(input, wochen, stunden, rechner, spitzeIndex);
+  const paket = schnuerePaket(input, wochen, stunden, massnahmen, rechner, spitzeIndex);
 
   return {
     stichtag,
@@ -24376,17 +24841,34 @@ function patchPlatz(opId) {
  *
  * @param {any} input @param {any[]} wochen @param {number} luecke
  */
-function alleMassnahmen(input, wochen, luecke, rechner) {
+function alleMassnahmen(input, wochen, luecke, rechner, spitzeIndex) {
   const config = input.config;
   const ab = naechsterMontag(wochen[0].von, config.planningDate);
   /** @type {any[]} */
   const out = [];
+
+  /*
+   * FIX Hoch06 (Audit 20.09.2026): "gedeckt" heisst RECHTZEITIG gedeckt.
+   *
+   * `rechner.gewinn(...)` summiert den Zusatzgewinn ueber den GANZEN
+   * Betrachtungszeitraum. Eine Massnahme, die erst NACH der Engpasswoche
+   * wirkt (z. B. Leiharbeiter ab naechstem Montag, waehrend die groesste
+   * Luecke schon diesen Freitag ist), zeigte trotzdem "reicht: true" - die
+   * Gesamtstunden passten, obwohl an der eigentlichen Faelligkeit nichts
+   * anders war. Deshalb hier zusaetzlich der kumulierte Gewinn NUR bis
+   * einschliesslich der Engpasswoche - das ist die Groesse, die "reicht"
+   * tatsaechlich beantworten muss.
+   */
+  const rechtzeitig = (schluessel, aendere) => round1(
+    rechner.gewinnJeWoche(schluessel, aendere).slice(0, spitzeIndex + 1).reduce((a, b) => a + b, 0),
+  );
 
   /* 1. Ueberstunden - guenstigster Weg, aber mit Grenze. */
   const ueberProStunde = rechner.gewinn('UE-1', patchUeberstunden(1, wochen));
   const noetig = ueberProStunde > 0 ? Math.ceil((luecke / ueberProStunde) * 2) / 2 : Infinity;
   const ueberWert = Math.min(UEBERSTUNDEN_GRENZE, Math.max(1, Number.isFinite(noetig) ? noetig : UEBERSTUNDEN_GRENZE));
   const ueberStunden = rechner.gewinn(`UE-${ueberWert}`, patchUeberstunden(ueberWert, wochen));
+  const ueberRechtzeitig = rechtzeitig(`UE-${ueberWert}`, patchUeberstunden(ueberWert, wochen));
   out.push({
     key: MASSNAHME.UEBERSTUNDEN,
     rang: 1,
@@ -24395,8 +24877,10 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
     einheit: 'h je MA und Woche',
     beschreibung: `${zahl(ueberWert)} h je Mitarbeiter und Woche, ${wochen.length} Wochen lang`,
     stunden: ueberStunden,
+    /** Davon bis einschliesslich der Engpasswoche wirksam (Fix Hoch06) */
+    rechtzeitigStunden: ueberRechtzeitig,
     kosten: kosten(config, ueberStunden, 'OVERTIME'),
-    reicht: ueberStunden >= luecke,
+    reicht: ueberRechtzeitig >= luecke,
     grenze: ueberWert >= UEBERSTUNDEN_GRENZE && ueberStunden < luecke
       ? `Mehr als ${UEBERSTUNDEN_GRENZE} h je Mitarbeiter und Woche sind nicht vorgesehen.`
       : null,
@@ -24432,6 +24916,8 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
   const leiheNoetig = proLeihe > 0 ? Math.min(leiheFrei, Math.ceil(luecke / proLeihe)) : leiheFrei;
   const leiheWert = Math.max(1, leiheNoetig);
   const leiheStunden = rechner.gewinn(`LE-${leiheWert}-${ab}`, patchLeihe(leiheWert, ab));
+  const leiheRechtzeitig = rechtzeitig(`LE-${leiheWert}-${ab}`, patchLeihe(leiheWert, ab));
+  const leiheRechnungsstunden = abrechnungsStunden(config, wochen, ab, leiheWert);
   out.push({
     key: MASSNAHME.LEIHE,
     rang: 3,
@@ -24440,8 +24926,12 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
     einheit: leiheWert === 1 ? 'zusätzlich' : 'zusätzlich',
     beschreibung: `${leiheWert} Leiharbeiter zusätzlich ab ${formatDE(ab)}`,
     stunden: leiheStunden,
-    kosten: kosten(config, leiheStunden, 'TEMP'),
-    reicht: leiheStunden >= luecke,
+    /** Davon bis einschliesslich der Engpasswoche wirksam (Fix Hoch06) */
+    rechtzeitigStunden: leiheRechtzeitig,
+    /** Bezahlte Anwesenheitsstunden - Grundlage der Kostenrechnung (Fix Hoch05) */
+    rechnungsstunden: leiheRechnungsstunden,
+    kosten: kosten(config, leiheRechnungsstunden, 'TEMP'),
+    reicht: leiheRechtzeitig >= luecke,
     grenze: leiheWert >= leiheFrei && leiheStunden < luecke
       ? `Mehr als ${leiheFrei} Leiharbeiterplätze sind nicht angelegt.`
       : null,
@@ -24455,6 +24945,7 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
   const samstagNoetig = proSamstag > 0 ? Math.min(wochen.length, Math.ceil(luecke / proSamstag)) : wochen.length;
   const samstagWert = Math.max(1, samstagNoetig);
   const samstagStunden = rechner.gewinn(`SA-${samstagWert}`, patchSamstag(samstagWert, wochen));
+  const samstagRechtzeitig = rechtzeitig(`SA-${samstagWert}`, patchSamstag(samstagWert, wochen));
   out.push({
     key: MASSNAHME.SAMSTAG,
     rang: 4,
@@ -24463,8 +24954,10 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
     einheit: samstagWert === 1 ? 'Samstag' : 'Samstage',
     beschreibung: `${samstagWert} Samstage mit ${Math.round(SAMSTAG_QUOTE * 100)} % der Mannschaft`,
     stunden: samstagStunden,
+    /** Davon bis einschliesslich der Engpasswoche wirksam (Fix Hoch06) */
+    rechtzeitigStunden: samstagRechtzeitig,
     kosten: kosten(config, samstagStunden, 'SATURDAY'),
-    reicht: samstagStunden >= luecke,
+    reicht: samstagRechtzeitig >= luecke,
     grenze: samstagWert >= wochen.length && samstagStunden < luecke
       ? `Mehr als ${wochen.length} Samstage hat der Zeitraum nicht.`
       : null,
@@ -24488,7 +24981,7 @@ function alleMassnahmen(input, wochen, luecke, rechner) {
  *
  * @param {any} input @param {any[]} wochen @param {number} luecke @param {any[]} massnahmen
  */
-function schnuerePaket(input, wochen, luecke, massnahmen, rechner) {
+function schnuerePaket(input, wochen, luecke, massnahmen, rechner, spitzeIndex) {
   if (luecke <= 0) return null;
   const config = input.config;
   const ab = naechsterMontag(wochen[0].von, config.planningDate);
@@ -24529,11 +25022,14 @@ function schnuerePaket(input, wochen, luecke, massnahmen, rechner) {
     const anzahl = proLeihe > 0 ? Math.min(frei, Math.ceil(offen / proLeihe)) : 0;
     if (anzahl > 0) {
       const h = rechner.gewinn(`LE-${anzahl}-${ab}`, patchLeihe(anzahl, ab));
+      /* FIX Hoch05: Kosten auf Rechnungsstunden, nicht auf den Nettogewinn. */
+      const rechnungsstunden = abrechnungsStunden(config, wochen, ab, anzahl);
       teile.push({
         key: MASSNAHME.LEIHE,
         text: `${anzahl} Leiharbeiter zusätzlich ab ${formatDE(ab)}`,
         stunden: h,
-        kosten: kosten(config, h, 'TEMP'),
+        rechnungsstunden,
+        kosten: kosten(config, rechnungsstunden, 'TEMP'),
         patch: { typ: MASSNAHME.LEIHE, wert: anzahl, ab },
       });
       offen = round1(offen - h);
@@ -24558,12 +25054,35 @@ function schnuerePaket(input, wochen, luecke, massnahmen, rechner) {
 
   const stunden = round1(teile.reduce((a, t) => a + t.stunden, 0));
   const kostenSumme = round2(teile.reduce((a, t) => a + t.kosten, 0));
+
+  /*
+   * FIX Hoch06 (Audit 20.09.2026): dieselbe Verwechslung wie bei den
+   * Einzelmassnahmen, hier fuer das GESAMTPAKET. `stunden` (und damit
+   * `reicht`) zaehlt den Zusatzgewinn ueber den ganzen Zeitraum - nicht, ob
+   * an der Engpasswoche selbst genug zusammenkommt. Deshalb zusaetzlich je
+   * Teil der kumulierte Gewinn bis einschliesslich der Engpasswoche.
+   */
+  const patchVon = (t) => {
+    if (t.patch?.typ === MASSNAHME.UEBERSTUNDEN) return patchUeberstunden(t.patch.wert, wochen);
+    if (t.patch?.typ === MASSNAHME.LEIHE) return patchLeihe(t.patch.wert, t.patch.ab);
+    if (t.patch?.typ === MASSNAHME.SAMSTAG) return patchSamstag(t.patch.wert, wochen);
+    return null;
+  };
+  const rechtzeitigStunden = round1(teile.reduce((a, t) => {
+    const fn = patchVon(t);
+    if (!fn) return a;
+    const reihe = rechner.gewinnJeWoche(`PAKET-${t.key}-${JSON.stringify(t.patch)}`, fn);
+    return a + reihe.slice(0, spitzeIndex + 1).reduce((x, y) => x + y, 0);
+  }, 0));
+
   return {
     teile,
     stunden,
+    /** Davon bis einschliesslich der Engpasswoche wirksam (Fix Hoch06) */
+    rechtzeitigStunden,
     kosten: kostenSumme,
     deckung: luecke > 0 ? Math.round((stunden / luecke) * 100) : 100,
-    reicht: stunden >= luecke,
+    reicht: rechtzeitigStunden >= luecke,
     offen: round1(Math.max(0, offen)),
     text: teile.map((t) => t.text).join(' + '),
   };
@@ -24616,6 +25135,24 @@ function naechsterMontag(wochenVon, stichtag) {
   return d;
 }
 
+/**
+ * FIX Hoch05 (Audit 20.09.2026): bezahlte Anwesenheits-/Rechnungsstunden
+ * zusaetzlicher Leiharbeiter - GETRENNT vom produktiven Kapazitaetsgewinn.
+ *
+ * `rechner.gewinn(...)` liefert den NETTO-Kapazitaetsgewinn: Einarbeitung
+ * (40/60/80 %) und Betreuungsaufwand sind darin bereits abgezogen. Die
+ * Rechnung stellt aber die volle vereinbarte Wochenarbeitszeit in Rechnung -
+ * unabhaengig davon, wie produktiv die Einarbeitungswoche war. Wer den
+ * Nettogewinn mit dem Rechnungssatz multipliziert, unterschaetzt die Kosten.
+ *
+ * @param {any} config @param {any[]} wochen @param {string} ab @param {number} anzahl
+ */
+function abrechnungsStunden(config, wochen, ab, anzahl) {
+  const proWoche = Number(config.workTime?.regularHoursPerWeek ?? 37.5);
+  const volleWochen = wochen.filter((w) => cmpDate(w.von, ab) >= 0).length;
+  return round2(Math.max(0, anzahl) * volleWochen * proWoche);
+}
+
 /** Kosten der Zusatzstunden. @param {any} config @param {number} stunden @param {string} art */
 function kosten(config, stunden, art) {
   if (stunden <= 0) return 0;
@@ -24656,6 +25193,7 @@ function wendeMassnahmeAn(config, patch, wochenKeys) {
 }
 
   __exports["mehraufwand"] = mehraufwand;
+  __exports["abrechnungsStunden"] = abrechnungsStunden;
   __exports["wendeMassnahmeAn"] = wendeMassnahmeAn;
   __exports["QUARTAL_WOCHEN"] = QUARTAL_WOCHEN;
   __exports["UEBERSTUNDEN_GRENZE"] = UEBERSTUNDEN_GRENZE;
