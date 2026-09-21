@@ -856,6 +856,16 @@ export function createApi(store, options = {}) {
         people: plan.people,
         unassignedHours: plan.unassignedHours,
         days: plan.days,
+        schichtplan: plan.schichtplan,
+        unbesetzteSchichten: plan.unbesetzteSchichten,
+        /**
+         * Luecken-Report (Nutzeranforderung 25.09.2026: "welcher Arbeit ist
+         * aus welchem Grund nicht freigegeben?") - kam bisher gar nicht
+         * beim Client an, obwohl engine/assignment.js es schon lieferte.
+         */
+        luecken: plan.luecken,
+        lueckenJeGrund: plan.lueckenJeGrund,
+        lueckenJeWocheUndOp: plan.lueckenJeWocheUndOp,
       };
     },
 

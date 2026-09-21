@@ -992,8 +992,49 @@ function wochenPlan(a, plan, neu) {
     h('span', 'nur Eingeplante zeigen'));
   kopf.append(umschalter);
 
-  return h('div', kopf, table(spalten, zeilen, { compact: true }), fuss);
+  return h('div', kopf, table(spalten, zeilen, { compact: true }), fuss, lueckenBericht(plan, wk));
 }
+
+/**
+ * Luecken-Report (Nutzeranforderung 25.09.2026: "welcher Arbeit ist aus
+ * welchem Grund nicht freigegeben?"): jede Stunde, die die Terminierung
+ * heute als ausfuehrbar eingestuft hat, aber die Einsatzplanung niemandem
+ * zuteilen konnte - mit Auftrag, Arbeitsgang und nachpruefbarem Grund.
+ * Ersetzt nicht die Ursachenanalyse je Auftrag (Aufträge → Zeile
+ * anklicken) - die erklärt, warum ein Auftrag insgesamt zu spät ist,
+ * dieser Bericht erklärt eine einzelne unbesetzte Stunde am Tag.
+ */
+function lueckenBericht(plan, wk) {
+  const zeilen = (plan.luecken ?? []).filter((l) => l.weekKey === wk)
+    .sort((a, b) => b.stunden - a.stunden);
+  if (zeilen.length === 0) return null;
+  const summe = zeilen.reduce((a, l) => a + l.stunden, 0);
+  return card(`Nicht besetzbare Stunden dieser Woche (${fmt.h(summe)})`, table([
+    { key: 'date', label: 'Tag', render: (l) => fmt.dateShort(l.date) },
+    { key: 'orderNo', label: 'Auftrag' },
+    { key: 'opName', label: 'Arbeitsgang' },
+    { key: 'stunden', label: 'Stunden', num: true, render: (l) => fmt.h(l.stunden) },
+    {
+      key: 'hauptgrund',
+      label: 'Grund',
+      render: (l) => h('span', {
+        title: (l.jeSchicht ?? []).map((s) => `Schicht ${s.schicht}: ${s.anwesendInSchicht} anwesend, `
+          + `${s.qualifiziert} qualifiziert, ${s.qualifiziertMitBudget.length} mit Restbudget, `
+          + `Platzgrenze ${s.platzGrenze}, belegt ${s.platzBelegt}`).join('\n'),
+      }, LUECKEN_GRUND[l.hauptgrund]?.text ?? l.hauptgrund),
+    },
+  ], zeilen, { compact: true }), {
+    sub: 'Von der Terminierung freigegebene Arbeit, für die heute niemand passte - mit dem genauen Grund je Zeile.',
+    flush: true,
+  });
+}
+
+/** Grund je Lücke - Klartext statt Code. */
+const LUECKEN_GRUND = {
+  KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT: { text: 'keine Qualifizierte in der Schicht' },
+  BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT: { text: 'Qualifizierte schon anderweitig verplant' },
+  PLATZGRENZE_DER_SCHICHT_ERREICHT: { text: 'Platzgrenze erreicht' },
+};
 
 /**
  * Text fuer "Arbeit des Tages ist vergeben" - nennt die TATSAECHLICHE

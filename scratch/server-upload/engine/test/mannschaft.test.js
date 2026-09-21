@@ -603,3 +603,39 @@ test('Aushilfe: kein Helfer, wenn die Terminierung keine Aushilfe eingepreist ha
   assert.ok(idle, 'MAAP steht stattdessen korrekt als ohne Arbeit da');
   assert.equal(idle.grund, 'KEINE_QUALIFIKATION');
 });
+
+/* ------------------------------------------------------------------ *
+ * Luecken-Report (Nutzeranforderung 25.09.2026)
+ * ------------------------------------------------------------------ */
+
+test('Lücken-Report: ZAHLEN-Modus kann mehr Kapazität versprechen, als die reale Mannschaft trägt', () => {
+  /*
+   * "welcher Arbeit ist aus welchem Grund nicht freigegeben?" Ein
+   * konkreter, real vorkommender Fall: Im Modus ZAHLEN rechnet die
+   * Terminierung mit einer abstrakten Kopfzahl (baseHeadcount), die
+   * Einsatzplanung verteilt aber nur an die tatsächlich benannten
+   * Personen der Mannschaftsliste. Reicht die Namensliste nicht an die
+   * Kopfzahl heran, entsteht echte, unbesetzbare Arbeit - keine
+   * Terminierungslücke, sondern eine Besetzungslücke.
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 5,
+      team: {
+        source: 'ZAHLEN', enforceSkills: true,
+        people: [helferPerson('A', { SAEGEN: true })],
+      },
+    },
+  });
+  const templates = { NEUBAU: { key: 'NEUBAU', steps: [{ opId: 'SAEGEN', hours: 30 }] } };
+  const project = createProject({ projectType: 'NEUBAU', dueDate: '2026-12-01', priority: 'P1' });
+  const result = runSchedule({ config, projects: [project], templates });
+  const plan = assignPeople(result, config, {});
+
+  assert.ok(plan.unassignedHours > 0, 'die Kopfzahl verspricht mehr, als die eine benannte Person leisten kann');
+  const luecke = plan.luecken.find((l) => l.opId === 'SAEGEN');
+  assert.ok(luecke, 'die unbesetzbare Arbeit muss im Lücken-Report stehen');
+  assert.equal(luecke.hauptgrund, 'BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT',
+    'die einzige qualifizierte Person ist ausgeschöpft - kein Platzproblem');
+  assert.equal(plan.lueckenJeGrund.BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT, luecke.stunden);
+});

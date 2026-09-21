@@ -18,6 +18,7 @@ ist – in der Oberfläche mit einem Hinweiszeichen, im Datenmodell mit
 | `rampUp.temp` / `rampUp.hire` | 40 / 60 / 80 % | Auskunft 09/2026 | Erfahrungswert, nicht gemessen. |
 | Betreuungsstunden | 5 / 3 / 1 h je Woche | Auskunft 09/2026 | Erfahrungswert. |
 | `saturday.quota` | 20 % | Lastenheft §26 | Die alte Excel rechnete mit 80 %. |
+| `resources.byOperation.ENDKONTROLLE.aushilfe` | leistung 0,5 / stundenfaktor 1 | 1:1 von der Hydroprüfung übernommen (Nutzeranforderung 25.09.2026: "wie Hydro") | Nur bei Hydro und Entgraten sind diese Werte von der Abteilung bestätigt. Bei Endkontrolle noch offen: bringt der Helfer wirklich dieselbe Zeitersparnis, oder kostet er (wie beim Entgraten) zusätzliche Arbeitszeit? |
 
 ## 2. Kosten
 

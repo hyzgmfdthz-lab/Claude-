@@ -286,8 +286,25 @@ export function defaultPlaces() {
      * Endkontrolle eine Möglichkeit" - ohne maxPlaces war ein
      * zusaetzlicher Platz als Massnahme gar nicht waehlbar
      * (patchPlatz in engine/mehraufwand.js braucht maxPlaces>0).
+     *
+     * Aushilfe (Nutzeranforderung 25.09.2026, ausdruecklich bestaetigt):
+     * "wie Hydro" - ein Helfer bereitet vor und arbeitet dem Pruefer zu.
+     * ACHTUNG: anders als bei Hydro/Entgraten liegen hierfuer noch KEINE
+     * von der Abteilung bestaetigten Werte vor - leistung/stundenfaktor
+     * sind vorlaeufig 1:1 von Hydro uebernommen (validated: false) und
+     * muessen noch bestaetigt werden.
      */
-    ENDKONTROLLE: { places: 2, maxPlaces: 3, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – dritter Platz als Maßnahme möglich' },
+    ENDKONTROLLE: {
+      places: 2, maxPlaces: 3, workersPerPlace: 1,
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 1, validated: false,
+        label: 'dem Prüfer zuarbeiten',
+        text: 'Ein Mitarbeiter bereitet vor und arbeitet dem Prüfer zu (Werte vorläufig von der '
+          + 'Hydroprüfung übernommen, noch zu bestätigen).',
+      },
+      note: 'zwei Plätze, je eine Person – dritter Platz als Maßnahme möglich, im Engpass kann ein '
+        + 'Helfer zuarbeiten (Werte zu validieren)',
+    },
     REINIGEN: { places: 1, workersPerPlace: 1 },
   };
 }
