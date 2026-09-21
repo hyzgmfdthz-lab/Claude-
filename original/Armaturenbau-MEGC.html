@@ -18375,6 +18375,34 @@ function runSchedule(input) {
       ? grundOrder.slice().sort((a, b) => Number(hatVorfahrt(b)) - Number(hatVorfahrt(a)))
       : grundOrder;
 
+    /*
+     * Ein Auftrag wird an diesem Tag bearbeitet - Buchhaltung an einer
+     * Stelle, damit der normale Durchlauf und die WIP-Ausnahme (siehe
+     * unten) exakt dieselbe Nachbereitung durchlaufen.
+     */
+    const bearbeiteAuftrag = (st, bypassProjectLimit = false) => {
+      const used = allocateProjectDay(st, ctx, bypassProjectLimit);
+      if (used > EPS) {
+        parallelUsed++;
+        dayRecord.activeProjects++;
+        st.started = true;
+        st.startDate ??= date;
+      }
+      const rest = remainingManHoursOf(st);
+      st.remainingManHours = rest;
+      if (rest <= EPS && !st.finished) {
+        st.finished = true;
+        st.forecastFinish = lastAllocationDate(st) ?? date;
+      }
+      return used;
+    };
+    const vermerkeWipAusnahme = (st, grund, manHours) => {
+      (dayRecord.wipAusnahmen ??= []).push({ projectId: st.id, grund, manHours: round2(manHours) });
+    };
+
+    /** @type {any[]} Ganz uebersprungen wegen "hoechstens N Auftraege gleichzeitig" */
+    const wegenParallelUebersprungen = [];
+
     for (const st of todaysOrder) {
       if (st.finished) continue;
       if (ctx.poolRest <= EPS) break;
@@ -18382,22 +18410,48 @@ function runSchedule(input) {
 
       if (maxParallel > 0 && parallelUsed >= maxParallel) {
         blocked.push({ date, projectId: st.id, opId: null, manHours: 0, cause: LIMITER.PARALLEL_PROJECTS, info: true });
+        wegenParallelUebersprungen.push(st);
         continue;
       }
 
-      const used = allocateProjectDay(st, ctx);
-      if (used > EPS) {
-        parallelUsed++;
-        dayRecord.activeProjects++;
-        st.started = true;
-        st.startDate ??= date;
-      }
+      bearbeiteAuftrag(st);
+    }
 
-      const rest = remainingManHoursOf(st);
-      st.remainingManHours = rest;
-      if (rest <= EPS && !st.finished) {
-        st.finished = true;
-        st.forecastFinish = lastAllocationDate(st) ?? date;
+    /*
+     * FIX R06/WIP-Ausnahme (Nutzerentscheidung 21.09.2026): "Grenze bei
+     * Leerlauf automatisch lockern - mit sichtbarem Hinweis, dass das eine
+     * Ausnahme war."
+     *
+     * Bleibt nach dem normalen Durchlauf noch echte Mannschaftszeit im
+     * Pool uebrig - niemand wuerde durch das Oeffnen der Grenze also
+     * jemand anderem etwas wegnehmen -, oeffnet die Anwendung gezielt
+     * genau die zwei WIP-Grenzen, an denen (und nur daran) ein Auftrag an
+     * diesem Tag gescheitert ist. Vorgaenger, Material, Qualifikation,
+     * Plaetze und Maschinen bleiben in jedem Fall hart.
+     *
+     * 1. "Hoechstens N Auftraege gleichzeitig": ganz uebersprungene
+     *    Auftraege bekommen jetzt doch ihren normalen Durchlauf.
+     */
+    if (ctx.poolRest > EPS && wegenParallelUebersprungen.length > 0) {
+      for (const st of wegenParallelUebersprungen) {
+        if (st.finished || ctx.poolRest <= EPS) break;
+        const used = bearbeiteAuftrag(st);
+        if (used > EPS) vermerkeWipAusnahme(st, LIMITER.PARALLEL_PROJECTS, used);
+      }
+    }
+    /*
+     * 2. "Hoechstens M Mitarbeiter je Auftrag": jeder noch offene Auftrag
+     *    bekommt einen zweiten, um genau diese Grenze erweiterten
+     *    Durchlauf. Ohne echten Poolrest oder ohne dass die Grenze
+     *    tatsaechlich der Engpass war, aendert dieser Durchlauf nichts -
+     *    er ist dann ein wirkungsloser No-Op, kein Risiko.
+     */
+    if (maxWorkersProject > 0 && ctx.poolRest > EPS) {
+      for (const st of todaysOrder) {
+        if (st.finished || ctx.poolRest <= EPS) break;
+        if (st.earliestRelease && cmpDate(date, st.earliestRelease) < 0) continue;
+        const used = bearbeiteAuftrag(st, true);
+        if (used > EPS) vermerkeWipAusnahme(st, LIMITER.PROJECT_LIMIT, used);
       }
     }
 
@@ -18564,11 +18618,21 @@ function lastAllocationDate(st) {
 
 /**
  * Belegt einen Tag fuer ein Projekt (mehrere Durchlaeufe wegen Ueberlappung).
+ *
+ * @param {boolean} [bypassProjectLimit] FIX R06/WIP-Ausnahme (Nutzerentscheidung
+ *   21.09.2026): "Grenze bei Leerlauf automatisch lockern - mit sichtbarem
+ *   Hinweis." Ein zweiter Aufruf fuer denselben Auftrag am selben Tag (siehe
+ *   runSchedule) kann damit die Grenze "Mitarbeiter je Auftrag" gezielt
+ *   ausser Kraft setzen, wenn nach dem normalen Durchlauf noch echte,
+ *   sonst ungenutzte Mannschaftszeit im Pool uebrig ist. Alle anderen
+ *   Grenzen (Vorgaenger, Material, Qualifikation, Plaetze/Maschinen)
+ *   bleiben unveraendert hart - nur diese eine, organisatorische Grenze
+ *   wird punktuell geoeffnet.
  * @returns {number} verbrauchte Mannstunden
  */
-function allocateProjectDay(st, ctx) {
+function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
   const { cap, date } = ctx;
-  let projectManRest = ctx.maxWorkersProject > 0
+  let projectManRest = (!bypassProjectLimit && ctx.maxWorkersProject > 0)
     ? ctx.maxWorkersProject * cap.hoursPerEmployee * cap.productivity
     : Infinity;
   let usedTotal = 0;
