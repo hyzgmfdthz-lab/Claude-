@@ -209,29 +209,23 @@ test('Über Kapazität hält sich an den gewählten Zeitraum', () => {
    * ein kürzeres Ende gewählt wurde - deadlineShortfall() suchte den
    * größten Fehlbetrag über ALLE Termine, auch weit hinter dem gewählten
    * Zeitraum. Ein Termin, der außerhalb des gewählten Fensters liegt, darf
-   * dessen Kennzahl nicht mehr bestimmen.
+   * dessen Kennzahl nicht mehr bestimmen. Gleicher Aufbau wie beim Test
+   * "... nennt Stundenzahl und Termin" oben (dort ohne Fenster geprüft).
    */
+  const projects = Array.from({ length: 3 }, (_, i) => createProject({
+    id: `P${i}`, orderNo: `P-${i}`, projectType: 'NEUBAU', variant: 'FT40',
+    dueDate: '2026-10-02', priority: 'P1', sequence: i * 10,
+  }));
   const { result } = run({
     config: testConfig({ workforce: { baseHeadcount: 2 } }),
-    templates: {
-      NEUBAU_FT40: template('NEUBAU_FT40', 'Test', { SAEGEN: 300 }),
-      NEUBAU_FT20: template('NEUBAU_FT20', 'Klein', { SAEGEN: 20 }),
-    },
-    projects: [
-      createProject({
-        id: 'FRUEH', orderNo: 'FRUEH', projectType: 'NEUBAU', variant: 'FT20',
-        dueDate: '2026-09-25', priority: 'P1', sequence: 10,
-      }),
-      createProject({
-        id: 'SPAET', orderNo: 'SPAET', projectType: 'NEUBAU', variant: 'FT40',
-        dueDate: '2027-02-26', priority: 'P3', sequence: 20,
-      }),
-    ],
+    templates: { NEUBAU_FT40: template('NEUBAU_FT40', 'Test', { SAEGEN: 200 }) },
+    projects,
   });
   const ohneFenster = deadlineShortfall(result);
-  const mitFenster = deadlineShortfall(result, '2026-10-31');
-  assert.ok(ohneFenster.untilDate > '2026-10-31',
-    `der größte Fehlbetrag liegt ohne Fenster beim späten Termin (${ohneFenster.untilDate})`);
-  assert.ok(mitFenster.untilDate === null || mitFenster.untilDate <= '2026-10-31',
-    `mit Fenster darf kein Termin nach dem Fensterende genannt werden (${mitFenster.untilDate})`);
+  const mitFenster = deadlineShortfall(result, '2026-09-25');
+  assert.equal(ohneFenster.untilDate, '2026-10-02', 'ohne Fenster wird der Termin genannt');
+  assert.ok(ohneFenster.hours > 0, 'und es fehlt wirklich etwas');
+  assert.equal(mitFenster.hours, 0,
+    `mit Fenster vor dem Termin darf dessen Fehlbetrag nicht mehr zählen (${mitFenster.hours} h)`);
+  assert.equal(mitFenster.untilDate, null);
 });
