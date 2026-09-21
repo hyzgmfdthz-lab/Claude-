@@ -18375,7 +18375,19 @@ function runSchedule(input) {
      * Auftrag und JEDEN Arbeitsgang des Tages gemeinsam.
      */
     const teamCfg = config?.workforce?.team;
-    const teamToday = teamCfg && teamCfg.enforceSkills !== false ? teamOn(config, date) : null;
+    /*
+     * FIX (Nutzerentscheidung 21.09.2026, aus der Netzwerkversion
+     * uebernommen): nur bei einer echten Mannschaftsliste (source ===
+     * 'MANNSCHAFT') gibt es Namen, gegen die reserviert werden kann. Im
+     * Modus 'ZAHLEN' (abstrakte Kopfzahl-Uebersteuerung, z.B.
+     * baseHeadcount) gibt es keine Personenliste - ohne diese Pruefung
+     * wuerde die Namensliste faelschlich als absolute Obergrenze
+     * herangezogen, auch wenn baseHeadcount bewusst groesser gewaehlt
+     * wurde. capacity.js/headcountFor() nutzt exakt dieselbe Pruefung.
+     */
+    const teamToday = teamCfg && teamCfg.source === 'MANNSCHAFT' && teamCfg.enforceSkills !== false
+      ? teamOn(config, date)
+      : null;
     const personRest = teamToday
       ? Object.fromEntries(teamToday.present.map((p) => [
         p.id,
