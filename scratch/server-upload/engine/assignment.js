@@ -44,7 +44,7 @@
 
 import { OPERATION_BY_ID, round2 } from './model.js';
 import { peopleOf, personPresent, absenceOn, personEffectiveFactor } from './team.js';
-import { placesFor, workersPerPlace, DAY_KIND } from './capacity.js';
+import { placesFor, workersPerPlace, DAY_KIND, LIMITER_LABEL } from './capacity.js';
 import { schichtenJeArbeitsgang, wochenSchichten, SCHICHT_STUNDEN } from './schichtplan.js';
 import { weekKey } from './calendar.js';
 
@@ -95,6 +95,24 @@ export function assignPeople(result, config, range = {}) {
     .map((d) => d.date);
 
   const projectName = new Map((result.projects ?? []).map((p) => [p.id, p.orderNo ?? p.id]));
+
+  /** Wartende Arbeit je Tag - fuer die Begruendung "warum bekomme ich nichts" */
+  /** @type {Map<string, any[]>} */
+  const stauAm = new Map();
+  for (const b of result.blocked ?? []) {
+    if (b.info || !b.opId) continue;
+    (stauAm.get(b.date) ?? stauAm.set(b.date, []).get(b.date)).push(b);
+  }
+
+  /*
+   * Luecken-Report (Nutzeranforderung 21.09.2026): fuer jede von der
+   * Terminierung als ausfuehrbar eingestufte, aber hier nicht besetzbare
+   * Stunde der konkrete, nachpruefbare Ablehnungsgrund - Qualifikation,
+   * Budget oder Platzgrenze. Nicht "kein Platz frei" als Sammelbegriff,
+   * sondern: welche Bedingung genau hat gefehlt.
+   * @type {any[]}
+   */
+  const luecken = [];
 
   /*
    * Schichten - wochenweise, nie tageweise.
@@ -149,6 +167,8 @@ export function assignPeople(result, config, range = {}) {
     const heuteAn = {};
     /** Welche Personen stehen heute an einem Arbeitsgang? (Plaetze zaehlen) */
     const personenAn = {};
+    /** Heute liegengebliebene Stunden je Arbeitsgang (fuer den Luecken-Report) */
+    const restHeute = {};
 
     // Arbeit des Tages je Arbeitsgang zusammenfassen - ein Arbeitsgang mit
     // drei Auftraegen ist drei Positionen, aber dieselben Plaetze.
@@ -241,6 +261,7 @@ export function assignPeople(result, config, range = {}) {
         }
         if (restStunden > 0.01) {
           offen = round2(offen + restStunden);
+          restHeute[a.opId] = round2((restHeute[a.opId] ?? 0) + restStunden);
           unbesetzteSchichten[a.opId] = round2((unbesetzteSchichten[a.opId] ?? 0) + restStunden);
           eintraege.push({
             personId: null, opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
@@ -248,6 +269,55 @@ export function assignPeople(result, config, range = {}) {
             orderNo: projectName.get(a.projectId) ?? a.projectId,
             hours: round2(restStunden),
             schicht: null,
+          });
+          /*
+           * Diagnose je Schicht: dieselben Bedingungen, die die
+           * Vergabe-Schleife oben schon prueft (Qualifikation, Budget,
+           * Schicht, Platz) - hier nur nicht als Filter, sondern als
+           * Befund. Material/Vorgaenger tauchen hier nie auf: waeren sie
+           * die Ursache, haette die Terminierung diese Stunde gar nicht
+           * erst als ausfuehrbar eingestuft.
+           */
+          const jeSchicht = [];
+          for (let sn = 1; sn <= opSchichten; sn++) {
+            const inDerSchicht = anwesend.filter((p) => (schichtVon[p.id] ?? 1) === sn);
+            const qualifiziert = inDerSchicht.filter((p) => p.skills?.[a.opId]);
+            const mitBudget = qualifiziert.filter((p) => (rest[p.id] ?? 0) > 0.01);
+            const schluessel = `${a.opId}#${sn}`;
+            const platzBelegt = [...(personenAn[schluessel] ?? [])].filter((id) => (rest[id] ?? 0) > 0.01).length;
+            jeSchicht.push({
+              schicht: sn,
+              anwesendInSchicht: inDerSchicht.length,
+              qualifiziert: qualifiziert.length,
+              qualifiziertMitBudget: mitBudget.map((p) => ({ id: p.id, restBudget: rest[p.id] })),
+              platzGrenze: plaetzeJeSchicht,
+              platzBelegt,
+              grund: qualifiziert.length === 0
+                ? 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT'
+                : mitBudget.length === 0
+                  ? 'BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT'
+                  : 'PLATZGRENZE_DER_SCHICHT_ERREICHT',
+            });
+          }
+          /*
+           * Der klarste, umsetzbare Befund: gab es in IRGENDEINER passenden
+           * Schicht eine qualifizierte Person mit Restbudget, die nur an
+           * der Platzgrenze scheiterte? Dann ist das eine echte Platzfrage
+           * (ein weiterer Platz/eine weitere Schicht haette geholfen).
+           * Sonst fehlte die Person selbst.
+           */
+          const hauptgrund = jeSchicht.some((s) => s.grund === 'PLATZGRENZE_DER_SCHICHT_ERREICHT')
+            ? 'PLATZGRENZE_DER_SCHICHT_ERREICHT'
+            : jeSchicht.every((s) => s.grund === 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT')
+              ? 'KEINE_QUALIFIZIERTE_PERSON_IN_SCHICHT'
+              : 'BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT';
+          luecken.push({
+            date, weekKey: weekKey(date),
+            projectId: a.projectId, orderNo: projectName.get(a.projectId) ?? a.projectId,
+            opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
+            stunden: round2(restStunden),
+            hauptgrund,
+            jeSchicht,
           });
         }
       }
@@ -267,19 +337,49 @@ export function assignPeople(result, config, range = {}) {
       /* Laeuft ueberhaupt ein Arbeitsgang in MEINER Schicht, den ich darf? */
       const inMeinerSchicht = konnte.filter(
         (op) => Math.max(1, Math.floor(schichtenJeOp[op.opId] ?? 1)) >= meineSchicht);
+      /*
+       * "Kein Platz frei" war zu oft die falsche Antwort.
+       *
+       * Unterschieden wird jetzt:
+       *   KEIN_PLATZ_FREI   heute blieb Arbeit liegen, die niemand mehr
+       *                     annehmen konnte -> Plaetze/Schichten helfen
+       *   ARBEIT_VERTEILT   alles Freigegebene ist vergeben -> es fehlt
+       *                     freigegebene Arbeit, kein Platz
+       */
+      const bliebLiegen = inMeinerSchicht.some((op) => (restHeute[op.opId] ?? 0) > 0.01);
       const grund = proOp.size === 0
         ? 'KEINE_ARBEIT'
         : konnte.length === 0
           ? 'KEINE_QUALIFIKATION'
           : inMeinerSchicht.length === 0
             ? 'SCHICHT_OHNE_ARBEIT'
-            : 'KEIN_PLATZ_FREI';
+            : bliebLiegen
+              ? 'KEIN_PLATZ_FREI'
+              : 'ARBEIT_VERTEILT';
+      /*
+       * Wartet an einem meiner Arbeitsgaenge Arbeit, die heute nicht
+       * beginnen durfte? Dann steht hier, WORAN sie haengt - das ist die
+       * Antwort auf "warum bekomme ich nichts zu tun".
+       */
+      let warteUrsache = null;
+      if (grund === 'ARBEIT_VERTEILT') {
+        const meine = new Set(konnte.map((op) => op.opId));
+        const wartend = {};
+        for (const b of stauAm.get(date) ?? []) {
+          if (!meine.has(b.opId)) continue;
+          wartend[b.cause] = round2((wartend[b.cause] ?? 0) + b.manHours);
+        }
+        const top = Object.entries(wartend).sort((x, y) => y[1] - x[1])[0];
+        if (top) warteUrsache = { ursache: LIMITER_LABEL[top[0]] ?? top[0], stunden: top[1] };
+      }
       ohneArbeit.push({
         id: p.id,
         grund,
         schicht: meineSchicht,
         arbeitsgaenge: konnte.map((op) => op.opId),
         stunden: round2(rest[p.id] ?? 0),
+        /** Nur bei ARBEIT_VERTEILT: woran die wartende Arbeit haengt */
+        warteUrsache,
       });
       byPerson[p.id].idleDays = (byPerson[p.id].idleDays ?? 0) + 1;
       byPerson[p.id].idleReasons = byPerson[p.id].idleReasons ?? {};
@@ -299,6 +399,19 @@ export function assignPeople(result, config, range = {}) {
     });
   }
 
+  /** Gesamtstunden je Ablehnungsgrund - schneller Ueberblick vor den Einzelfaellen */
+  const lueckenJeGrund = {};
+  for (const l of luecken) lueckenJeGrund[l.hauptgrund] = round2((lueckenJeGrund[l.hauptgrund] ?? 0) + l.stunden);
+  /** Fehlende Besetzung je KW und Arbeitsgang */
+  const lueckenJeWocheUndOpMap = {};
+  for (const l of luecken) {
+    const schluessel = `${l.weekKey}|${l.opId}`;
+    const e = (lueckenJeWocheUndOpMap[schluessel] ??= {
+      weekKey: l.weekKey, opId: l.opId, opName: l.opName, stunden: 0,
+    });
+    e.stunden = round2(e.stunden + l.stunden);
+  }
+
   return {
     days: tage,
     people: Object.values(byPerson),
@@ -313,6 +426,15 @@ export function assignPeople(result, config, range = {}) {
     },
     /** Stunden, die eine Schicht nicht besetzen konnte - je Arbeitsgang */
     unbesetzteSchichten,
+    /**
+     * Luecken-Report: ungedeckter Bedarf mit konkretem, nachpruefbarem
+     * Ablehnungsgrund je Stunde. Ersetzt keine Kapazitaetsrechnung - zeigt
+     * nur, woran eine von der Terminierung als ausfuehrbar eingestufte
+     * Stunde in der Einsatzplanung tatsaechlich gescheitert ist.
+     */
+    luecken,
+    lueckenJeGrund,
+    lueckenJeWocheUndOp: Object.values(lueckenJeWocheUndOpMap),
   };
 }
 

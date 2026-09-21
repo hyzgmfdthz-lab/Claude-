@@ -391,21 +391,32 @@ test('Einsatzplan: wer anwesend ist und nichts bekommt, steht mit Grund da', () 
       gruende.add(i.grund);
       assert.ok(!mitArbeit.has(i.id),
         `${tag.date}: ${i.id} steht als ohne Arbeit, hat aber Einträge`);
-      assert.ok(['KEIN_PLATZ_FREI', 'KEINE_QUALIFIKATION', 'KEINE_ARBEIT'].includes(i.grund),
+      assert.ok(['KEIN_PLATZ_FREI', 'ARBEIT_VERTEILT', 'KEINE_QUALIFIKATION', 'SCHICHT_OHNE_ARBEIT', 'KEINE_ARBEIT'].includes(i.grund),
         `unbekannter Grund ${i.grund}`);
     }
   }
   assert.ok(leerTage > 0, 'im Startdatenbestand stehen Leute ohne Platz – das muss dastehen');
-  assert.ok(gruende.has('KEIN_PLATZ_FREI'),
-    'der häufigste Grund im Startdatenbestand sind belegte Plätze');
+  /*
+   * FIX Luecken-Report (Nutzeranforderung 21.09.2026): "kein Platz frei"
+   * war zu oft die falsche Antwort - nachgemessen im Original-Datenbestand
+   * (siehe original/Armaturenbau-MEGC.html): in den meisten Faellen war
+   * der Platz gar nicht belegt, es fehlte schlicht freigegebene Arbeit.
+   * Im echten Startdatenbestand dieser Codebasis bestaetigt sich das noch
+   * deutlicher: JEDER Leerlauf geht auf verteilte/fehlende Arbeit zurueck,
+   * keiner auf eine echte Platzgrenze.
+   */
+  assert.ok(gruende.has('ARBEIT_VERTEILT'),
+    'der häufigste Grund im Startdatenbestand ist verteilte, nicht freigegebene Arbeit - nicht belegte Plätze');
+  assert.ok(plan.days.some((tag) => (tag.idle ?? []).some((i) => i.grund === 'ARBEIT_VERTEILT' && i.warteUrsache?.ursache)),
+    'mindestens ein ARBEIT_VERTEILT-Fall muss die wartende Ursache konkret benennen');
 
   /*
-   * Und die Gegenprobe zur Meldung: Wenn so viele Personentage ohne Platz
+   * Und die Gegenprobe zur Meldung: Wenn so viele Personentage ohne Arbeit
    * dastehen, darf die Anwendung nicht nach Personal rufen.
    */
   const a = analyze(ds, 'BASELINE');
   assert.equal(a.plausibility.items.find((x) => x.code === 'PERSONAL_FEHLT'), undefined,
-    'bei belegten Plätzen ist "es fehlt Personal" die falsche Meldung');
+    'bei verteilter Arbeit ist "es fehlt Personal" die falsche Meldung');
 });
 
 test('Einsatzplan: niemand wird an einen Arbeitsgang gestellt, den er nicht darf', () => {

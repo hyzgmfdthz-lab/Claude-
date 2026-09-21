@@ -934,6 +934,27 @@ function wochenPlan(a, plan, neu) {
   const leerTage = tage.reduce((x, d) => x + (d.idle ?? []).length, 0);
   const leerGruende = {};
   for (const d of tage) for (const i of d.idle ?? []) leerGruende[i.grund] = (leerGruende[i.grund] ?? 0) + 1;
+  /*
+   * FIX (gemeldet 21.09.2026 anhand eines Bildschirmfotos): der
+   * Hinweistext bei "Arbeit des Tages ist vergeben" nannte bisher IMMER
+   * dieselben zwei Beispielursachen ("höchstens 3 Aufträge gleichzeitig",
+   * "höchstens 4 Mitarbeiter je Auftrag") - unabhängig davon, ob diese
+   * Grenzen ueberhaupt aktiv sind und unabhaengig von der tatsaechlichen
+   * Ursache. Jetzt wird die tatsaechliche Ursache je Person (warteUrsache,
+   * siehe engine/assignment.js) ausgezaehlt und im Text genannt.
+   */
+  const arbeitVerteiltUrsachen = {};
+  let arbeitVerteiltOhneUrsache = 0;
+  for (const d of tage) {
+    for (const i of d.idle ?? []) {
+      if (i.grund !== 'ARBEIT_VERTEILT') continue;
+      if (i.warteUrsache?.ursache) {
+        arbeitVerteiltUrsachen[i.warteUrsache.ursache] = (arbeitVerteiltUrsachen[i.warteUrsache.ursache] ?? 0) + 1;
+      } else {
+        arbeitVerteiltOhneUrsache += 1;
+      }
+    }
+  }
   const arbeitstage = tage.reduce((x, d) => x + (d.entries.some((e) => e.personId) ? 1 : 0), 0);
   const stundenGesamt = tage.reduce((x, d) => x + d.entries.filter((e) => e.personId)
     .reduce((y, e) => y + e.hours, 0), 0);
@@ -950,10 +971,16 @@ function wochenPlan(a, plan, neu) {
         Object.entries(leerGruende)
           .map(([g, n]) => `${n}× ${LEER_GRUND[g]?.text ?? g}`).join(', '),
         '. ',
+        leerGruende.ARBEIT_VERTEILT
+          ? h('span', arbeitVerteiltText(arbeitVerteiltUrsachen, arbeitVerteiltOhneUrsache))
+          : null,
         leerGruende.KEIN_PLATZ_FREI
-          ? h('span', 'Das ist kein Fehler in der Liste: Die Plätze und die Belegungszeit begrenzen, '
-            + 'wie viele Leute gleichzeitig arbeiten können. Zusätzliches Personal würde hier nur '
-            + 'danebenstehen.')
+          ? h('span', ' Wo wirklich kein Platz frei war, blieb Arbeit liegen – dort hilft ein '
+            + 'Platz mehr oder eine weitere Schicht (Übersicht → Engpässe & Wirkung).')
+          : null,
+        leerGruende.SCHICHT_OHNE_ARBEIT
+          ? h('span', ' „Schicht ohne Arbeit" heißt: In der Schicht dieser Woche lief an diesem Tag '
+            + 'nichts, was die Person darf. Die Einteilung gilt wochenweise – siehe Schichtplan.')
           : null)
       : null);
 
@@ -968,9 +995,45 @@ function wochenPlan(a, plan, neu) {
   return h('div', kopf, table(spalten, zeilen, { compact: true }), fuss);
 }
 
+/**
+ * Text fuer "Arbeit des Tages ist vergeben" - nennt die TATSAECHLICHE
+ * Ursache (aus warteUrsache je Person, engine/assignment.js) statt einer
+ * immer gleichen Beispielerklaerung.
+ * @param {Record<string, number>} ursachen Anzahl Personentage je Ursache
+ * @param {number} ohneUrsache Personentage ohne feststellbare Wartearsache
+ *   (der Pool war exakt ausgeschoepft, keine Arbeit blieb liegen)
+ */
+function arbeitVerteiltText(ursachen, ohneUrsache) {
+  const einleitung = 'Der häufigste Grund ist nicht der Platz, sondern die freigegebene Arbeit: '
+    + 'Was heute beginnen darf, ist verteilt.';
+  const eintraege = Object.entries(ursachen).sort((a, b) => b[1] - a[1]);
+  if (eintraege.length === 0) {
+    return `${einleitung} Die Mannschaftsstunden waren an diesen Tagen bereits vollständig verplant – `
+      + 'mehr Plätze oder eine weitere Schicht schaffen dort keine zusätzliche Stunde.';
+  }
+  const genannt = eintraege.map(([u, n]) => `${n}× ${u}`).join(', ')
+    + (ohneUrsache > 0 ? `, ${ohneUrsache}× ausgereizte Mannschaftsstunden` : '');
+  const nurPool = eintraege.every(([u]) => u === 'Mitarbeiterstunden') && ohneUrsache === 0;
+  const nurWip = eintraege.every(([u]) => u === 'Aufträge gleichzeitig' || u === 'Mitarbeiter je Auftrag');
+  const zusatz = nurPool
+    ? ' Mehr Plätze oder eine weitere Schicht ändern daran nichts – die Mannschaftsstunden selbst reichten nicht.'
+    : nurWip
+      ? ' Diese Grenzen werden bei drohendem Leerlauf automatisch und sichtbar gelockert.'
+      : ' Mehr Plätze oder eine weitere Schicht helfen nur dort, wo tatsächlich ein Platz die Ursache war.';
+  return `${einleitung} Tatsächliche Ursache in diesem Zeitraum: ${genannt}.${zusatz}`;
+}
+
 /** Warum steht hier nichts? Klartext statt Gedankenstrich. */
 const LEER_GRUND = {
   KEIN_PLATZ_FREI: { text: 'kein Platz frei', lang: 'Anwesend, aber alle Plätze dieses Arbeitsgangs sind belegt. Mehr Personal ändert daran nichts.' },
+  /*
+   * "Kein Platz frei" war zu oft die falsche Antwort (Rückfrage
+   * 18.09.2026): meistens war der Platz gar nicht belegt, es fehlte
+   * schlicht freigegebene Arbeit (Vorgänger, Material, oder die Grenzen
+   * "höchstens N Aufträge gleichzeitig"/"höchstens M Mitarbeiter je
+   * Auftrag"). Ein zweiter Platz hätte daran nichts geändert.
+   */
+  ARBEIT_VERTEILT: { text: 'Arbeit des Tages ist vergeben', lang: 'Anwesend, aber alles heute freigegebene ist bereits verteilt. Ein weiterer Platz würde hier nichts ändern.' },
   KEINE_QUALIFIKATION: { text: 'keine Qualifikation', lang: 'Anwesend, aber für die heute laufenden Arbeitsgänge nicht angehakt.' },
   KEINE_ARBEIT: { text: 'keine Arbeit offen', lang: 'Anwesend, an diesem Tag ist nichts einzuplanen.' },
   /*
