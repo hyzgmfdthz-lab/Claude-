@@ -2487,12 +2487,33 @@ function migrate(dataset) {
      * werden dabei gleich mit uebersetzt: true -> 2 (Fortgeschritten,
      * entspricht dem bisherigen "kann"), false -> 0 (nicht qualifiziert).
      */
+    /*
+     * FIX (Nutzermeldung 23.09.2026, "ich kann in den Feldern die leer sind
+     * nicht eingeben"): Ein Skill-Wert, der weder boolean noch null/undefined
+     * noch eine gueltige Zahl 0-3 ist (z. B. ein Text aus einem alten
+     * Excel-Import), fiel vorher durch beide Zweige durch - blieb also
+     * unveraendert stehen. Number(diesesWert) ergab beim Rendern dann NaN,
+     * worauf keine der vier <option> als "selected" markiert war: die Zelle
+     * wirkte leer, obwohl ein Wert hinterlegt war. Jetzt wird jeder Wert, der
+     * sich nicht als Zahl 0-3 lesen laesst, ebenso wie ein fehlender Wert
+     * behandelt (Stufe 2, wie das bisherige "kann").
+     */
+    const bekannteArbeitsgaenge = new Set(OPERATIONS.map((op) => op.id));
     for (const p of s.config.workforce?.team?.people ?? []) {
       p.skills ??= {};
       for (const op of OPERATIONS) {
         const v = p.skills[op.id];
         if (typeof v === 'boolean') p.skills[op.id] = v ? 2 : 0;
         else if (v == null) p.skills[op.id] = 2;
+        else {
+          const n = Number(v);
+          p.skills[op.id] = Number.isFinite(n) ? Math.min(3, Math.max(0, Math.round(n))) : 2;
+        }
+      }
+      // Verwaiste Schluessel von Arbeitsgaengen, die es nicht mehr gibt (z. B.
+      // das alte "ORBITAL" vor der Aufteilung in Kehlnaht/Stumpfnaht).
+      for (const key of Object.keys(p.skills)) {
+        if (!bekannteArbeitsgaenge.has(key)) delete p.skills[key];
       }
     }
   }
