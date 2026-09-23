@@ -7286,7 +7286,18 @@ async function ladeMannschaft(a, container) {
     a.ui.mannschaftAlle ??= false;
     const sichtbar = a.ui.mannschaftAlle ? t.people : t.people.filter((p) => !frei.includes(p));
 
-    container.replaceChildren(
+    /*
+     * FIX (Nutzermeldung 23.09.2026, Screenshot mit dem Wort "false" direkt
+     * über der Tabelle): `container.replaceChildren(...)` ist die NATIVE
+     * DOM-Methode, nicht der hauseigene h()/append()-Helfer - sie filtert
+     * anders als dieser keine falsy-Werte heraus, sondern wandelt jedes
+     * Nicht-Node-Argument per String() in einen Textknoten um. War
+     * `frei.length === 0` (keine leeren Leiharbeiterplätze mehr - hier
+     * war das vorher IMMER der Fall gewesen, deshalb ist der Fehler erst
+     * jetzt aufgefallen), stand hier buchstäblich der Text "false" über
+     * der Tabelle. Jetzt werden falsy Eintraege vorher herausgefiltert.
+     */
+    container.replaceChildren(...[
       frei.length > 0 && h('div.btn-row', { style: { padding: '10px 14px 0' } },
         h('span.small.muted', { style: { marginRight: '4px' } },
           `${frei.length} leere Leiharbeiterplätze sind ${a.ui.mannschaftAlle ? 'eingeblendet' : 'ausgeblendet'} – `
@@ -7301,7 +7312,8 @@ async function ladeMannschaft(a, container) {
         `Eingeplant sind derzeit ${t.people.filter(eingeplant).length} von ${t.people.length} Kürzeln – `
         + 'Leiharbeiter mit Eintritt zählen ab diesem Tag mit, alle übrigen erst, wenn sie in der '
         + 'Anwesenheit je Kalenderwoche angehakt sind. Ohne Einsatzende rechnet die Anwendung bis '
-        + 'zum Ende des Horizonts mit ihnen.'));
+        + 'zum Ende des Horizonts mit ihnen.'),
+    ].filter(Boolean));
   } catch {
     container.replaceChildren(h('div.note.note--error', 'Mannschaft konnte nicht geladen werden.'));
   }
