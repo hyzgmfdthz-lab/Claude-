@@ -288,6 +288,28 @@ test('Urlaub erscheint im Einsatzplan und bringt keine Arbeit', () => {
   assert.equal(tag.entries.filter((e) => e.personId === 'SYLA').length, 0);
 });
 
+test('Von Hand gesetzte Schicht (KW-weise) wirkt bis in den Einsatzplan', () => {
+  /*
+   * Nutzerauftrag (23.09.2026): "ich brauche noch die Möglichkeit die
+   * Mitarbeiter KW weise in Schichten einzuplanen. und danach sollte auch
+   * der Einsatzplan laufen." Geprüft wird end-to-end: eine manuelle
+   * Zuordnung auf Personenebene (workforce.team.people[].shiftWeeks) muss
+   * im fertigen Einsatzplan ankommen - nicht nur in wochenSchichten().
+   */
+  const input = materialize(seedDataset(), 'BASELINE');
+  input.config.resources.operatingHoursPerDay = 16; // erzwingt echten Mehrschichtbetrieb
+  const jaro = input.config.workforce.team.people.find((p) => p.id === 'JARO');
+  // Ohne Eingriff landet JARO laut Rotation in Schicht 2 (siehe Woche
+  // ohne eigenen Eintrag weiter unten) - die manuelle 1 wirkt dagegen.
+  jaro.shiftWeeks = { '2026-W39': 1 };
+
+  const plan = assignPeople(runSchedule(input), input.config);
+  const w39 = plan.days.find((d) => d.weekKey === '2026-W39');
+  const w40 = plan.days.find((d) => d.weekKey === '2026-W40');
+  assert.equal(w39.schichten.JARO, 1, 'manuelle Zuordnung gilt in KW39');
+  assert.equal(w40.schichten.JARO, 2, 'ohne eigenen Eintrag rotiert KW40 automatisch weiter');
+});
+
 /* ------------------------------------------------------------------ *
  * Einsatzplan - so, wie die Abteilungsleitung ihn aufstellt
  *

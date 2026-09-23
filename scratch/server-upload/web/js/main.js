@@ -71,6 +71,7 @@ const AREAS = {
     tabs: [
       { id: 'liste', title: 'Mannschaft', render: (a) => mannschaft.renderTab(a, 'mannschaft') },
       { id: 'anwesenheit', title: 'Anwesenheit je KW', render: (a) => mannschaft.renderTab(a, 'anwesenheit') },
+      { id: 'schicht', title: 'Schichtplanung je KW', render: (a) => mannschaft.renderTab(a, 'schicht') },
       { id: 'urlaub', title: 'Urlaubsplanung einlesen', render: (a) => mannschaft.renderTab(a, 'urlaub') },
       { id: 'einsatz', title: 'Einsatzplan', render: (a) => mannschaft.renderTab(a, 'einsatz') },
       { id: 'aushang', title: 'Aushang', render: (a) => mannschaft.renderTab(a, 'aushang') },

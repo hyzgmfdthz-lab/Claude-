@@ -240,6 +240,16 @@ Leiharbeiter ist, wird zu günstig und zu produktiv gerechnet.
 gewünschten Woche. Wer einen Eintritt hinterlegt hat, ist ab dann dauerhaft
 dabei. Ohne Einsatzende rechnet die Anwendung bis zum Ende des Horizonts mit.
 
+**Schicht von Hand festlegen:** Mannschaft → Schichtplanung je KW. Ohne
+Eintrag rotiert jede schichtfähige Person automatisch wochenweise durch die
+Schichten (nie tageweise). Wird hier für eine Person und Woche eine Schicht
+gewählt, gilt sie statt der Rotation - der Einsatzplan zieht sofort nach.
+Nicht schichtfähige Personen (siehe Mannschaft → Spalte „Schicht") stehen
+hier nicht, sie arbeiten immer in der Frühschicht. Läuft in der gewählten
+Schicht kein Arbeitsgang, den die Person darf, steht sie im Einsatzplan mit
+dem Grund „keine Arbeit in dieser Schicht" - das ist dann kein Fehler,
+sondern die ehrliche Folge der Wahl.
+
 **Aushang drucken:** Mannschaft → Aushang → Drucken. Eine Seite für alle.
 
 **Ansicht speichern:** Filter einstellen, in der Reiterleiste rechts auf

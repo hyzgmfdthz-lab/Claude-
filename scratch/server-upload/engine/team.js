@@ -87,6 +87,16 @@ function person(id, o = {}) {
      */
     weeks: {},
     /**
+     * Von Hand gesetzte Schicht je Kalenderwoche (1 = frueh, 2 = spaet,
+     * 3 = nacht). Nutzerauftrag (23.09.2026): "ich brauche noch die
+     * Moeglichkeit die Mitarbeiter KW weise in Schichten einzuplanen."
+     * Nur Abweichungen stehen hier drin - ohne Eintrag rotiert die Person
+     * weiter automatisch (siehe schichtplan.js, wochenSchichten). Nur fuer
+     * schichtfaehige Personen wirksam.
+     * @type {Record<string, number>}
+     */
+    shiftWeeks: {},
+    /**
      * Einsatzfenster. Vor `startDate` und nach `endDate` ist die Person
      * nicht verfuegbar - auch dann nicht, wenn eine Woche angehakt ist.
      * Ohne Fenster gilt die Person als dauerhaft im Haus.

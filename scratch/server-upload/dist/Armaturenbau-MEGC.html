@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Armaturenbau MEGC – Produktionsplanung</title>
-<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-21">
+<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-23">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%2300727a'/><path d='M22 70V30h11v15h12V30h11v40H45V55H33v15z' fill='white'/></svg>">
 <style>
 /* ==================================================================
@@ -1047,6 +1047,7 @@ const AREAS = {
     tabs: [
       { id: 'liste', title: 'Mannschaft', render: (a) => mannschaft.renderTab(a, 'mannschaft') },
       { id: 'anwesenheit', title: 'Anwesenheit je KW', render: (a) => mannschaft.renderTab(a, 'anwesenheit') },
+      { id: 'schicht', title: 'Schichtplanung je KW', render: (a) => mannschaft.renderTab(a, 'schicht') },
       { id: 'urlaub', title: 'Urlaubsplanung einlesen', render: (a) => mannschaft.renderTab(a, 'urlaub') },
       { id: 'einsatz', title: 'Einsatzplan', render: (a) => mannschaft.renderTab(a, 'einsatz') },
       { id: 'aushang', title: 'Aushang', render: (a) => mannschaft.renderTab(a, 'aushang') },
@@ -6719,6 +6720,7 @@ function renderTab(a, tab) {
   a.ui.teamTab = tab;
   if (tab === 'einsatz') return h('div.view', einsatzplan(a));
   if (tab === 'anwesenheit') return h('div.view', anwesenheit(a));
+  if (tab === 'schicht') return h('div.view', schichtplanung(a));
   if (tab === 'urlaub') return h('div.view', urlaubEinlesen(a));
   if (tab === 'aushang') return h('div.view', aushang(a));
   return h('div.view', mannschaft(a));
@@ -7501,6 +7503,108 @@ function matrixTabelle(a, t, alle, wochen, seite, seiten, neu) {
       'Stammleute sind grundsätzlich eingeplant, Leiharbeiter grundsätzlich nicht. '
       + 'Ein Leiharbeiter leistet in seinen ersten drei Wochen 40, 60 und 80 Prozent – '
       + 'die Einarbeitung ist in der Summe berücksichtigt.'));
+}
+
+/* ------------------------------------------------------------------ *
+ * Schichtplanung je Kalenderwoche
+ *
+ * Nutzerauftrag (23.09.2026): "ich brauche noch die Möglichkeit die
+ * Mitarbeiter KW weise in Schichten einzuplanen. und danach sollte auch
+ * der Einsatzplan laufen." Bisher lief die Schichtzuweisung ausschließlich
+ * automatisch (Rotation, siehe engine/schichtplan.js wochenSchichten) -
+ * ohne jede Möglichkeit, von Hand einzugreifen. Wer hier eine Schicht
+ * setzt, hat Vorrang vor der Rotation; alle übrigen rotieren weiter wie
+ * bisher um die verbleibenden Plätze. Der Einsatzplan liest dieselbe
+ * Schichtzuordnung (assignment.js) und zieht automatisch nach - dafür war
+ * an der Einsatzplan-Seite selbst nichts zu ändern.
+ * ------------------------------------------------------------------ */
+
+function schichtplanung(a) {
+  const inhalt = h('div', h('div.empty', 'Schichtplanung wird geladen …'));
+  ladeSchichtplanung(a, inhalt);
+  return card('Schichtplanung je Kalenderwoche', inhalt, {
+    sub: 'Von Hand gesetzte Schichten gehen der automatischen Rotation vor. '
+      + 'Ohne Eintrag rotiert die Person weiter automatisch durch die Schichten.',
+    flush: true,
+  });
+}
+
+async function ladeSchichtplanung(a, container) {
+  try {
+    const t = await api.team(a.scenarioId);
+    const alle = wochenListe(a);
+    a.ui.schichtSeite ??= 0;
+    const zeichne = () => {
+      const seiten = Math.ceil(alle.length / 13);
+      const seite = Math.min(Math.max(0, a.ui.schichtSeite), seiten - 1);
+      a.ui.schichtSeite = seite;
+      const wochen = alle.slice(seite * 13, seite * 13 + 13);
+      container.replaceChildren(schichtMatrix(a, t, alle, wochen, seite, seiten, zeichne));
+    };
+    zeichne();
+  } catch {
+    container.replaceChildren(h('div.note.note--error', 'Schichtplanung konnte nicht geladen werden.'));
+  }
+}
+
+function schichtMatrix(a, t, alle, wochen, seite, seiten, neu) {
+  const schichtfaehig = t.people.filter((p) => p.shiftCapable !== false);
+  const unfaehig = t.people.length - schichtfaehig.length;
+
+  const gesetzt = (p, wk) => {
+    const n = Number(p.shiftWeeks?.[wk]);
+    return Number.isInteger(n) && n >= 1 ? n : null;
+  };
+
+  const setzen = async (personId, wk, wert) => {
+    const people = t.people.map((p) => (p.id === personId
+      ? { ...p, shiftWeeks: { ...(p.shiftWeeks ?? {}) } }
+      : p));
+    const ziel = people.find((p) => p.id === personId);
+    if (wert == null) delete ziel.shiftWeeks[wk];
+    else ziel.shiftWeeks[wk] = wert;
+    t.people = people;
+    neu();
+    await a.patchConfig({ workforce: { team: { people } } },
+      `Schicht ${ziel.label || ziel.id} ${fmt.week(wk)}`);
+  };
+
+  const kopf = h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', padding: '10px 14px', flexWrap: 'wrap' } },
+    h('button.btn.btn--sm', { disabled: seite <= 0, onclick: () => { a.ui.schichtSeite = seite - 1; neu(); } }, '‹ früher'),
+    h('strong', `${fmt.weekLong(wochen[0]?.key)} bis ${fmt.weekLong(wochen[wochen.length - 1]?.key)}`),
+    h('button.btn.btn--sm', { disabled: seite >= seiten - 1, onclick: () => { a.ui.schichtSeite = seite + 1; neu(); } }, 'später ›'),
+    h('span.small.faint', { style: { marginLeft: 'auto' } },
+      `Zeitraum bis Ende 2027 · ${alle.length} Kalenderwochen`));
+
+  const kopfzeile = h('tr',
+    h('th.matrix__rowhead', 'Person'),
+    wochen.map((w) => h('th', { title: `Woche ab ${fmt.date(w.from)}` }, fmt.week(w.key))));
+
+  const zeilen = schichtfaehig.map((p) => h('tr',
+    h('td.matrix__rowhead',
+      h('strong.mono', p.label || p.id)),
+    wochen.map((w) => h('td', { style: { padding: '2px' } }, h('select', {
+      title: `${p.label || p.id} · ${fmt.weekLong(w.key)}`,
+      onchange: (e) => setzen(p.id, w.key, e.target.value ? Number(e.target.value) : null),
+    },
+      h('option', { value: '', selected: gesetzt(p, w.key) == null }, 'automatisch'),
+      t.shifts.map((s, i) => h('option', {
+        value: i + 1, selected: gesetzt(p, w.key) === i + 1,
+      }, `${i + 1} · ${s.name}`)))))));
+
+  return h('div',
+    kopf,
+    schichtfaehig.length === 0
+      ? h('div.empty', { style: { margin: '0 14px 10px' } }, 'Niemand in der Mannschaft ist schichtfähig.')
+      : h('div.scroll-x', h('table.matrix', h('thead', kopfzeile), h('tbody', zeilen))),
+    h('div.small.faint', { style: { padding: '8px 14px' } },
+      unfaehig > 0
+        ? `${unfaehig} Personen sind nicht schichtfähig und arbeiten immer in der Frühschicht - sie stehen `
+          + 'deshalb hier nicht.'
+        : null,
+      ' Läuft in der gesetzten Schicht keiner der Arbeitsgänge, für die diese Person qualifiziert ist, '
+      + 'steht sie im Einsatzplan mit dem Grund "keine Arbeit in dieser Schicht" - nicht als Fehler, sondern '
+      + 'als Hinweis, dass die Schicht so für sie nicht sinnvoll ist.'));
 }
 
 /* ------------------------------------------------------------------ *
@@ -21034,6 +21138,16 @@ function person(id, o = {}) {
      */
     weeks: {},
     /**
+     * Von Hand gesetzte Schicht je Kalenderwoche (1 = frueh, 2 = spaet,
+     * 3 = nacht). Nutzerauftrag (23.09.2026): "ich brauche noch die
+     * Moeglichkeit die Mitarbeiter KW weise in Schichten einzuplanen."
+     * Nur Abweichungen stehen hier drin - ohne Eintrag rotiert die Person
+     * weiter automatisch (siehe schichtplan.js, wochenSchichten). Nur fuer
+     * schichtfaehige Personen wirksam.
+     * @type {Record<string, number>}
+     */
+    shiftWeeks: {},
+    /**
      * Einsatzfenster. Vor `startDate` und nach `endDate` ist die Person
      * nicht verfuegbar - auch dann nicht, wenn eine Woche angehakt ist.
      * Ohne Fenster gilt die Person als dauerhaft im Haus.
@@ -22197,14 +22311,32 @@ function wochenSchichten(config, wochen, personen) {
       grenzen[sn - 1] = 0;
     }
   }
+  /*
+   * Von Hand gesetzte Schicht (Nutzerauftrag 23.09.2026): "ich brauche
+   * noch die Moeglichkeit die Mitarbeiter KW weise in Schichten
+   * einzuplanen." Wer fuer diese Woche eine Schicht gesetzt bekommen hat
+   * (person.shiftWeeks[wk], siehe team.js), behaelt sie - die Rotation
+   * greift nur noch fuer die uebrigen Personen und nur noch fuer die
+   * Plaetze, die die manuelle Zuordnung nicht schon belegt. Nicht
+   * schichtfaehige Personen (nurFrueh) koennen nicht manuell versetzt
+   * werden - dieselbe Grenze wie bei der Rotation.
+   */
   wochen.forEach((wk, wocheIndex) => {
     schichtenJeWoche[wk] = maxSchichten;
     /** @type {Record<string, number>} */
     const derWoche = {};
     for (const p of nurFrueh) derWoche[p.id] = 1;
 
+    /** @type {Map<string, number>} */
+    const manuell = new Map();
+    for (const p of faehig) {
+      const gesetzt = Number(p.shiftWeeks?.[wk]);
+      if (Number.isInteger(gesetzt) && gesetzt >= 1) manuell.set(p.id, gesetzt);
+    }
+    for (const [id, sn] of manuell) derWoche[id] = sn;
+
     if (maxSchichten <= 1) {
-      for (const p of faehig) derWoche[p.id] = 1;
+      for (const p of faehig) if (!manuell.has(p.id)) derWoche[p.id] = 1;
       zuordnung[wk] = derWoche;
       return;
     }
@@ -22213,13 +22345,23 @@ function wochenSchichten(config, wochen, personen) {
      * Rotation: Die Reihe wird je Woche um die Groesse der Fruehschicht
      * weitergedreht. Damit traegt nicht immer dieselbe Gruppe die Spaet-
      * und Nachtschicht - und innerhalb der Woche wechselt niemand.
+     *
+     * Laeuft nur noch ueber die Personen ohne manuelle Zuordnung, und die
+     * Sollbesetzung je Schicht sinkt um das, was manuell schon belegt ist.
      */
-    const reihe = [...faehig].sort((a, b) => (a.id < b.id ? -1 : 1));
-    const versatz = (wocheIndex * Math.max(1, grenzen[0])) % Math.max(1, reihe.length);
+    const frei = faehig.filter((p) => !manuell.has(p.id));
+    const grenzenRest = grenzen.map((n, idx) => {
+      const belegt = [...manuell.values()].filter((sn) => sn === idx + 1).length;
+      return Math.max(0, n - belegt);
+    });
+    const reihe = [...frei].sort((a, b) => (a.id < b.id ? -1 : 1));
+    const versatz = reihe.length
+      ? (wocheIndex * Math.max(1, grenzenRest[0])) % reihe.length
+      : 0;
     const gedreht = [...reihe.slice(versatz), ...reihe.slice(0, versatz)];
     let i = 0;
     for (let sn = 1; sn <= maxSchichten; sn++) {
-      const n = grenzen[sn - 1] ?? 0;
+      const n = grenzenRest[sn - 1] ?? 0;
       for (let k = 0; k < n && i < gedreht.length; k++, i++) derWoche[gedreht[i].id] = sn;
     }
     /* Wer uebrig bleibt, geht in die Fruehschicht - dort ist immer Arbeit */

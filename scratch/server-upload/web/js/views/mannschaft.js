@@ -28,6 +28,7 @@ export function renderTab(a, tab) {
   a.ui.teamTab = tab;
   if (tab === 'einsatz') return h('div.view', einsatzplan(a));
   if (tab === 'anwesenheit') return h('div.view', anwesenheit(a));
+  if (tab === 'schicht') return h('div.view', schichtplanung(a));
   if (tab === 'urlaub') return h('div.view', urlaubEinlesen(a));
   if (tab === 'aushang') return h('div.view', aushang(a));
   return h('div.view', mannschaft(a));
@@ -810,6 +811,108 @@ function matrixTabelle(a, t, alle, wochen, seite, seiten, neu) {
       'Stammleute sind grundsätzlich eingeplant, Leiharbeiter grundsätzlich nicht. '
       + 'Ein Leiharbeiter leistet in seinen ersten drei Wochen 40, 60 und 80 Prozent – '
       + 'die Einarbeitung ist in der Summe berücksichtigt.'));
+}
+
+/* ------------------------------------------------------------------ *
+ * Schichtplanung je Kalenderwoche
+ *
+ * Nutzerauftrag (23.09.2026): "ich brauche noch die Möglichkeit die
+ * Mitarbeiter KW weise in Schichten einzuplanen. und danach sollte auch
+ * der Einsatzplan laufen." Bisher lief die Schichtzuweisung ausschließlich
+ * automatisch (Rotation, siehe engine/schichtplan.js wochenSchichten) -
+ * ohne jede Möglichkeit, von Hand einzugreifen. Wer hier eine Schicht
+ * setzt, hat Vorrang vor der Rotation; alle übrigen rotieren weiter wie
+ * bisher um die verbleibenden Plätze. Der Einsatzplan liest dieselbe
+ * Schichtzuordnung (assignment.js) und zieht automatisch nach - dafür war
+ * an der Einsatzplan-Seite selbst nichts zu ändern.
+ * ------------------------------------------------------------------ */
+
+function schichtplanung(a) {
+  const inhalt = h('div', h('div.empty', 'Schichtplanung wird geladen …'));
+  ladeSchichtplanung(a, inhalt);
+  return card('Schichtplanung je Kalenderwoche', inhalt, {
+    sub: 'Von Hand gesetzte Schichten gehen der automatischen Rotation vor. '
+      + 'Ohne Eintrag rotiert die Person weiter automatisch durch die Schichten.',
+    flush: true,
+  });
+}
+
+async function ladeSchichtplanung(a, container) {
+  try {
+    const t = await api.team(a.scenarioId);
+    const alle = wochenListe(a);
+    a.ui.schichtSeite ??= 0;
+    const zeichne = () => {
+      const seiten = Math.ceil(alle.length / 13);
+      const seite = Math.min(Math.max(0, a.ui.schichtSeite), seiten - 1);
+      a.ui.schichtSeite = seite;
+      const wochen = alle.slice(seite * 13, seite * 13 + 13);
+      container.replaceChildren(schichtMatrix(a, t, alle, wochen, seite, seiten, zeichne));
+    };
+    zeichne();
+  } catch {
+    container.replaceChildren(h('div.note.note--error', 'Schichtplanung konnte nicht geladen werden.'));
+  }
+}
+
+function schichtMatrix(a, t, alle, wochen, seite, seiten, neu) {
+  const schichtfaehig = t.people.filter((p) => p.shiftCapable !== false);
+  const unfaehig = t.people.length - schichtfaehig.length;
+
+  const gesetzt = (p, wk) => {
+    const n = Number(p.shiftWeeks?.[wk]);
+    return Number.isInteger(n) && n >= 1 ? n : null;
+  };
+
+  const setzen = async (personId, wk, wert) => {
+    const people = t.people.map((p) => (p.id === personId
+      ? { ...p, shiftWeeks: { ...(p.shiftWeeks ?? {}) } }
+      : p));
+    const ziel = people.find((p) => p.id === personId);
+    if (wert == null) delete ziel.shiftWeeks[wk];
+    else ziel.shiftWeeks[wk] = wert;
+    t.people = people;
+    neu();
+    await a.patchConfig({ workforce: { team: { people } } },
+      `Schicht ${ziel.label || ziel.id} ${fmt.week(wk)}`);
+  };
+
+  const kopf = h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', padding: '10px 14px', flexWrap: 'wrap' } },
+    h('button.btn.btn--sm', { disabled: seite <= 0, onclick: () => { a.ui.schichtSeite = seite - 1; neu(); } }, '‹ früher'),
+    h('strong', `${fmt.weekLong(wochen[0]?.key)} bis ${fmt.weekLong(wochen[wochen.length - 1]?.key)}`),
+    h('button.btn.btn--sm', { disabled: seite >= seiten - 1, onclick: () => { a.ui.schichtSeite = seite + 1; neu(); } }, 'später ›'),
+    h('span.small.faint', { style: { marginLeft: 'auto' } },
+      `Zeitraum bis Ende 2027 · ${alle.length} Kalenderwochen`));
+
+  const kopfzeile = h('tr',
+    h('th.matrix__rowhead', 'Person'),
+    wochen.map((w) => h('th', { title: `Woche ab ${fmt.date(w.from)}` }, fmt.week(w.key))));
+
+  const zeilen = schichtfaehig.map((p) => h('tr',
+    h('td.matrix__rowhead',
+      h('strong.mono', p.label || p.id)),
+    wochen.map((w) => h('td', { style: { padding: '2px' } }, h('select', {
+      title: `${p.label || p.id} · ${fmt.weekLong(w.key)}`,
+      onchange: (e) => setzen(p.id, w.key, e.target.value ? Number(e.target.value) : null),
+    },
+      h('option', { value: '', selected: gesetzt(p, w.key) == null }, 'automatisch'),
+      t.shifts.map((s, i) => h('option', {
+        value: i + 1, selected: gesetzt(p, w.key) === i + 1,
+      }, `${i + 1} · ${s.name}`)))))));
+
+  return h('div',
+    kopf,
+    schichtfaehig.length === 0
+      ? h('div.empty', { style: { margin: '0 14px 10px' } }, 'Niemand in der Mannschaft ist schichtfähig.')
+      : h('div.scroll-x', h('table.matrix', h('thead', kopfzeile), h('tbody', zeilen))),
+    h('div.small.faint', { style: { padding: '8px 14px' } },
+      unfaehig > 0
+        ? `${unfaehig} Personen sind nicht schichtfähig und arbeiten immer in der Frühschicht - sie stehen `
+          + 'deshalb hier nicht.'
+        : null,
+      ' Läuft in der gesetzten Schicht keiner der Arbeitsgänge, für die diese Person qualifiziert ist, '
+      + 'steht sie im Einsatzplan mit dem Grund "keine Arbeit in dieser Schicht" - nicht als Fehler, sondern '
+      + 'als Hinweis, dass die Schicht so für sie nicht sinnvoll ist.'));
 }
 
 /* ------------------------------------------------------------------ *

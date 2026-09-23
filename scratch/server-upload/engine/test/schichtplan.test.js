@@ -16,10 +16,11 @@ import assert from 'node:assert/strict';
 import { seedDataset } from '../seed.js';
 import { materialize } from '../scenario.js';
 import { runSchedule } from '../scheduler.js';
+import { testConfig } from './helpers.js';
 import {
   MAX_SCHICHTEN, SCHICHT_STUNDEN, schichtenAus, stundenFuer, schichtenJeArbeitsgang,
   eingestellteStunden, koepfeJeSchicht, gebrauchteSchichtkoepfe, mitSchichten,
-  planeSchichten, fehlendePlaetze,
+  planeSchichten, fehlendePlaetze, wochenSchichten,
 } from '../schichtplan.js';
 
 function stand(mut = (c) => c) {
@@ -202,4 +203,57 @@ test('Ohne Rückstand fehlt auch kein Platz', () => {
   const { input } = stand();
   const leer = { projects: [], daySeries: [], blocked: [] };
   assert.deepEqual(fehlendePlaetze(input.config, leer, schichtenJeArbeitsgang(input.config)), []);
+});
+
+/* ------------------------------------------------------------------ *
+ * Manuelle Schichtzuordnung (Nutzerauftrag 23.09.2026: "ich brauche noch
+ * die Möglichkeit die Mitarbeiter KW weise in Schichten einzuplanen")
+ * ------------------------------------------------------------------ */
+
+test('Manuelle Schicht geht der automatischen Rotation vor', () => {
+  const cfg = testConfig({ resources: { operatingHoursPerDay: 16 } });
+  const personen = Array.from({ length: 8 }, (_, i) => ({ id: `P${i}`, shiftCapable: true, shiftWeeks: {} }));
+  personen[0].shiftWeeks = { '2026-W40': 1 };
+  personen[3].shiftWeeks = { '2026-W40': 1, '2026-W41': 2 };
+
+  const wp = wochenSchichten(cfg, ['2026-W40', '2026-W41'], personen);
+  assert.equal(wp.maxSchichten, 2, 'Testaufbau muss echten Mehrschichtbetrieb ergeben');
+  assert.equal(wp.zuordnung['2026-W40'].P0, 1, 'manuelle Zuordnung gilt, auch wenn die Rotation Schicht 2 gewählt hätte');
+  assert.equal(wp.zuordnung['2026-W40'].P3, 1);
+  // Ohne eigenen Eintrag in KW41 rotiert P0 wieder automatisch
+  assert.equal(wp.zuordnung['2026-W41'].P3, 2, 'die eigene Zuordnung für KW41 gilt');
+  assert.ok(wp.zuordnung['2026-W41'].P0 != null, 'P0 bekommt in KW41 wieder eine Schicht aus der Rotation');
+
+  // Jede Person erscheint in jeder Woche genau einmal - nichts geht verloren
+  for (const wk of ['2026-W40', '2026-W41']) {
+    assert.equal(Object.keys(wp.zuordnung[wk]).length, personen.length);
+  }
+});
+
+test('Manuelle Schicht wirkt auch ohne echten Mehrschichtbetrieb', () => {
+  /*
+   * Bewusste Entscheidung: eine manuell gesetzte Schicht 2 gilt auch dann,
+   * wenn in dieser Woche kein Arbeitsgang zweischichtig läuft - der
+   * Einsatzplan erklärt in diesem Fall mit einem eigenen Grund, warum die
+   * Person dort nichts zu tun bekommt (nicht stillschweigend ignorieren).
+   */
+  const cfg = testConfig();
+  const personen = [
+    { id: 'A', shiftCapable: true, shiftWeeks: { '2026-W40': 2 } },
+    { id: 'B', shiftCapable: true, shiftWeeks: {} },
+  ];
+  const wp = wochenSchichten(cfg, ['2026-W40'], personen);
+  assert.equal(wp.maxSchichten, 1, 'Testaufbau ist bewusst einschichtig');
+  assert.equal(wp.zuordnung['2026-W40'].A, 2);
+  assert.equal(wp.zuordnung['2026-W40'].B, 1);
+});
+
+test('Manuelle Schicht wird ignoriert, wenn die Person nicht schichtfähig ist', () => {
+  const cfg = testConfig({ resources: { operatingHoursPerDay: 16 } });
+  const personen = [
+    { id: 'C', shiftCapable: false, shiftWeeks: { '2026-W40': 2 } },
+    { id: 'D', shiftCapable: true, shiftWeeks: {} },
+  ];
+  const wp = wochenSchichten(cfg, ['2026-W40'], personen);
+  assert.equal(wp.zuordnung['2026-W40'].C, 1, 'nicht schichtfähig bleibt immer Frühschicht');
 });

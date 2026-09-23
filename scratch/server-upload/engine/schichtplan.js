@@ -708,14 +708,32 @@ export function wochenSchichten(config, wochen, personen) {
       grenzen[sn - 1] = 0;
     }
   }
+  /*
+   * Von Hand gesetzte Schicht (Nutzerauftrag 23.09.2026): "ich brauche
+   * noch die Moeglichkeit die Mitarbeiter KW weise in Schichten
+   * einzuplanen." Wer fuer diese Woche eine Schicht gesetzt bekommen hat
+   * (person.shiftWeeks[wk], siehe team.js), behaelt sie - die Rotation
+   * greift nur noch fuer die uebrigen Personen und nur noch fuer die
+   * Plaetze, die die manuelle Zuordnung nicht schon belegt. Nicht
+   * schichtfaehige Personen (nurFrueh) koennen nicht manuell versetzt
+   * werden - dieselbe Grenze wie bei der Rotation.
+   */
   wochen.forEach((wk, wocheIndex) => {
     schichtenJeWoche[wk] = maxSchichten;
     /** @type {Record<string, number>} */
     const derWoche = {};
     for (const p of nurFrueh) derWoche[p.id] = 1;
 
+    /** @type {Map<string, number>} */
+    const manuell = new Map();
+    for (const p of faehig) {
+      const gesetzt = Number(p.shiftWeeks?.[wk]);
+      if (Number.isInteger(gesetzt) && gesetzt >= 1) manuell.set(p.id, gesetzt);
+    }
+    for (const [id, sn] of manuell) derWoche[id] = sn;
+
     if (maxSchichten <= 1) {
-      for (const p of faehig) derWoche[p.id] = 1;
+      for (const p of faehig) if (!manuell.has(p.id)) derWoche[p.id] = 1;
       zuordnung[wk] = derWoche;
       return;
     }
@@ -724,13 +742,23 @@ export function wochenSchichten(config, wochen, personen) {
      * Rotation: Die Reihe wird je Woche um die Groesse der Fruehschicht
      * weitergedreht. Damit traegt nicht immer dieselbe Gruppe die Spaet-
      * und Nachtschicht - und innerhalb der Woche wechselt niemand.
+     *
+     * Laeuft nur noch ueber die Personen ohne manuelle Zuordnung, und die
+     * Sollbesetzung je Schicht sinkt um das, was manuell schon belegt ist.
      */
-    const reihe = [...faehig].sort((a, b) => (a.id < b.id ? -1 : 1));
-    const versatz = (wocheIndex * Math.max(1, grenzen[0])) % Math.max(1, reihe.length);
+    const frei = faehig.filter((p) => !manuell.has(p.id));
+    const grenzenRest = grenzen.map((n, idx) => {
+      const belegt = [...manuell.values()].filter((sn) => sn === idx + 1).length;
+      return Math.max(0, n - belegt);
+    });
+    const reihe = [...frei].sort((a, b) => (a.id < b.id ? -1 : 1));
+    const versatz = reihe.length
+      ? (wocheIndex * Math.max(1, grenzenRest[0])) % reihe.length
+      : 0;
     const gedreht = [...reihe.slice(versatz), ...reihe.slice(0, versatz)];
     let i = 0;
     for (let sn = 1; sn <= maxSchichten; sn++) {
-      const n = grenzen[sn - 1] ?? 0;
+      const n = grenzenRest[sn - 1] ?? 0;
       for (let k = 0; k < n && i < gedreht.length; k++, i++) derWoche[gedreht[i].id] = sn;
     }
     /* Wer uebrig bleibt, geht in die Fruehschicht - dort ist immer Arbeit */
