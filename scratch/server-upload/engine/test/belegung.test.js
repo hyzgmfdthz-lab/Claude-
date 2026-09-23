@@ -19,11 +19,11 @@ test('Belegungszeit: eigener Wert je Arbeitsgang hat Vorrang', () => {
   const cfg = testConfig({
     resources: {
       operatingHoursPerDay: 12,
-      byOperation: { ORBITAL: { operatingHours: 22.5 }, HEFTEN: { operatingHours: null } },
+      byOperation: { ORBITAL_KEHLNAHT: { operatingHours: 22.5 }, HEFTEN: { operatingHours: null } },
     },
   });
   assert.equal(operatingHours(cfg, '2026-09-07', 7.5), 12, 'allgemeiner Wert');
-  assert.equal(operatingHours(cfg, '2026-09-07', 7.5, 'ORBITAL'), 22.5, 'eigener Wert');
+  assert.equal(operatingHours(cfg, '2026-09-07', 7.5, 'ORBITAL_KEHLNAHT'), 22.5, 'eigener Wert');
   assert.equal(operatingHours(cfg, '2026-09-07', 7.5, 'HEFTEN'), 12, 'null = allgemeiner Wert');
   assert.equal(operatingHours(cfg, '2026-09-07', 7.5, 'BEIZEN'), 12, 'ohne Eintrag der allgemeine Wert');
 });
@@ -44,6 +44,8 @@ test('Plätze: eigener Wert, sonst die bisherigen Einzelwerte', () => {
   });
   assert.equal(placesFor(cfg, 'SAEGEN'), 1, 'eigener Wert');
   assert.equal(placesFor(cfg, 'HEFTEN'), 4, 'eigener Wert schlägt heftPlaces');
+  // 'ORBITAL' bleibt als Ressourcen-Schlüssel gültig (die Maschinenzahl gilt
+  // für Kehlnaht UND Stumpfnaht gemeinsam, siehe capacity.js dayCapacity()).
   assert.equal(placesFor(cfg, 'ORBITAL'), 6);
   assert.equal(placesFor(cfg, 'BEIZEN'), null, 'ohne Angabe keine Begrenzung');
   assert.equal(placesFor(cfg, 'ENTGRATEN'), null);
@@ -62,11 +64,11 @@ test('Drei Schichten am Orbitalschweißen heben die Maschinengrenze an', () => {
     resources: {
       operatingHoursPerDay: 7.5, orbitalMachines: 6, orbitalMachinesActive: 6,
       machinesPerWelder: 2, welders: { default: 8 },
-      byOperation: { ORBITAL: { operatingHours: 22.5 } },
+      byOperation: { ORBITAL_KEHLNAHT: { operatingHours: 22.5 } },
     },
   });
-  const a = dayCapacity(einSchicht, '2026-09-07').byOp.ORBITAL;
-  const b = dayCapacity(dreiSchichten, '2026-09-07').byOp.ORBITAL;
+  const a = dayCapacity(einSchicht, '2026-09-07').byOp.ORBITAL_KEHLNAHT;
+  const b = dayCapacity(dreiSchichten, '2026-09-07').byOp.ORBITAL_KEHLNAHT;
   assert.ok(b.capUnits > a.capUnits * 2.5, `3 Schichten müssen deutlich mehr zulassen (${a.capUnits} -> ${b.capUnits})`);
   assert.equal(a.limiter, LIMITER.ORBITAL_MACHINE, 'vorher begrenzen die Maschinen');
   assert.equal(b.limiter, LIMITER.ORBITAL_WELDER, 'danach die Schweißer');
@@ -77,10 +79,10 @@ test('Belegungszeit ohne zusätzliches Personal schafft keine Mannstunden', () =
   const kurz = dayCapacity(testConfig(basis), '2026-09-07');
   const lang = dayCapacity(testConfig({
     ...basis,
-    resources: { ...basis.resources, byOperation: { ORBITAL: { operatingHours: 24 }, HEFTEN: { operatingHours: 24 } } },
+    resources: { ...basis.resources, byOperation: { ORBITAL_KEHLNAHT: { operatingHours: 24 }, HEFTEN: { operatingHours: 24 } } },
   }), '2026-09-07');
   assert.equal(kurz.poolHours, lang.poolHours, 'der Mannstundenpool bleibt gleich');
-  assert.ok(lang.byOp.ORBITAL.capUnits <= lang.poolHours,
+  assert.ok(lang.byOp.ORBITAL_KEHLNAHT.capUnits <= lang.poolHours,
     'kein Arbeitsgang kann mehr Mannstunden verbrauchen, als vorhanden sind');
 });
 

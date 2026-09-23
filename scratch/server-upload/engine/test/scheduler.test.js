@@ -111,12 +111,12 @@ test('Überstunden erhöhen die Kapazität', () => {
 test('Orbitalschweißer reduzieren: Schweißengpass steigt', () => {
   const mk = (welders) => ({
     config: testConfig({ resources: { orbitalMachines: 6, orbitalMachinesActive: 6, welders: { default: welders, byWeekday: {}, byDate: {} } } }),
-    templates: { NEUBAU_FT40: template('NEUBAU_FT40', 'T', { ORBITAL: 400 }) },
+    templates: { NEUBAU_FT40: template('NEUBAU_FT40', 'T', { ORBITAL_KEHLNAHT: 400 }) },
     projects: [createProject({ id: 'T1', projectType: 'NEUBAU', variant: 'FT40', dueDate: '2026-09-30' })],
   });
   const many = run(mk(5));
   const few = run(mk(1));
-  assert.ok(few.result.daySeries[0].byOp.ORBITAL.capUnits < many.result.daySeries[0].byOp.ORBITAL.capUnits);
+  assert.ok(few.result.daySeries[0].byOp.ORBITAL_KEHLNAHT.capUnits < many.result.daySeries[0].byOp.ORBITAL_KEHLNAHT.capUnits);
   assert.ok(cmpDate(few.result.projects[0].forecastFinish, many.result.projects[0].forecastFinish) > 0);
   const blockedFew = few.result.blocked.filter((b) => b.cause === 'ORBITAL_WELDER').length;
   assert.ok(blockedFew > 0, 'Der Schweißerengpass muss als Ursache erfasst werden');
@@ -125,12 +125,12 @@ test('Orbitalschweißer reduzieren: Schweißengpass steigt', () => {
 test('Orbitalmaschine deaktivieren: Maschinenkapazität sinkt', () => {
   const mk = (machines) => ({
     config: testConfig({ resources: { orbitalMachines: 6, orbitalMachinesActive: machines, welders: { default: 5, byWeekday: {}, byDate: {} } } }),
-    templates: { NEUBAU_FT40: template('NEUBAU_FT40', 'T', { ORBITAL: 400 }) },
+    templates: { NEUBAU_FT40: template('NEUBAU_FT40', 'T', { ORBITAL_KEHLNAHT: 400 }) },
     projects: [createProject({ id: 'T1', projectType: 'NEUBAU', variant: 'FT40', dueDate: '2026-09-30' })],
   });
   const six = run(mk(6));
   const five = run(mk(5));
-  assert.ok(five.result.daySeries[0].byOp.ORBITAL.capUnits < six.result.daySeries[0].byOp.ORBITAL.capUnits);
+  assert.ok(five.result.daySeries[0].byOp.ORBITAL_KEHLNAHT.capUnits < six.result.daySeries[0].byOp.ORBITAL_KEHLNAHT.capUnits);
 });
 
 test('Dritter Heftplatz: Heftkapazität und Durchsatz steigen', () => {
@@ -221,7 +221,7 @@ test('Heften und Orbitalschweißen laufen überlappend, Vorsprung wird eingehalt
         key: 'NEUBAU_FT40', label: 'T', validated: true,
         steps: [
           { opId: 'HEFTEN', hours: 80, predecessors: [], earliestStartWeeksBeforeDue: null, maxWorkers: null },
-          { opId: 'ORBITAL', hours: 80, predecessors: [{ opId: 'HEFTEN', type: 'OVERLAP', leadHours: 5 }], earliestStartWeeksBeforeDue: null, maxWorkers: null },
+          { opId: 'ORBITAL_KEHLNAHT', hours: 80, predecessors: [{ opId: 'HEFTEN', type: 'OVERLAP', leadHours: 5 }], earliestStartWeeksBeforeDue: null, maxWorkers: null },
         ],
       },
     },
@@ -231,13 +231,13 @@ test('Heften und Orbitalschweißen laufen überlappend, Vorsprung wird eingehalt
   const ops = Object.fromEntries(result.projects[0].operations.map((o) => [o.opId, o]));
   // Beide Arbeitsgänge laufen an gemeinsamen Tagen
   const heftDays = new Set(result.allocations.filter((a) => a.opId === 'HEFTEN').map((a) => a.date));
-  const orbDays = new Set(result.allocations.filter((a) => a.opId === 'ORBITAL').map((a) => a.date));
+  const orbDays = new Set(result.allocations.filter((a) => a.opId === 'ORBITAL_KEHLNAHT').map((a) => a.date));
   const shared = [...heftDays].filter((d) => orbDays.has(d));
   assert.ok(shared.length > 0, 'Heften und Orbitalschweißen müssen parallel laufen können');
   // Orbital startet nicht vor Heften
-  assert.ok(cmpDate(ops.ORBITAL.start, ops.HEFTEN.start) >= 0);
+  assert.ok(cmpDate(ops.ORBITAL_KEHLNAHT.start, ops.HEFTEN.start) >= 0);
   // Orbital endet nicht vor Heften
-  assert.ok(cmpDate(ops.ORBITAL.end, ops.HEFTEN.end) >= 0);
+  assert.ok(cmpDate(ops.ORBITAL_KEHLNAHT.end, ops.HEFTEN.end) >= 0);
 });
 
 test('Mindestvorsprung wird tagesgenau eingehalten', () => {
@@ -251,7 +251,7 @@ test('Mindestvorsprung wird tagesgenau eingehalten', () => {
         key: 'NEUBAU_FT40', label: 'T', validated: true,
         steps: [
           { opId: 'HEFTEN', hours: 100, predecessors: [], earliestStartWeeksBeforeDue: null, maxWorkers: null },
-          { opId: 'ORBITAL', hours: 100, predecessors: [{ opId: 'HEFTEN', type: 'OVERLAP', leadHours: 20 }], earliestStartWeeksBeforeDue: null, maxWorkers: null },
+          { opId: 'ORBITAL_KEHLNAHT', hours: 100, predecessors: [{ opId: 'HEFTEN', type: 'OVERLAP', leadHours: 20 }], earliestStartWeeksBeforeDue: null, maxWorkers: null },
         ],
       },
     },
@@ -262,13 +262,13 @@ test('Mindestvorsprung wird tagesgenau eingehalten', () => {
   let heft = 0; let orb = 0;
   const byDate = new Map();
   for (const a of result.allocations) {
-    const e = byDate.get(a.date) ?? { HEFTEN: 0, ORBITAL: 0 };
+    const e = byDate.get(a.date) ?? { HEFTEN: 0, ORBITAL_KEHLNAHT: 0 };
     e[a.opId] = (e[a.opId] ?? 0) + a.units;
     byDate.set(a.date, e);
   }
   for (const [, v] of [...byDate.entries()].sort()) {
     heft += v.HEFTEN ?? 0;
-    orb += v.ORBITAL ?? 0;
+    orb += v.ORBITAL_KEHLNAHT ?? 0;
     if (heft < 100) {
       assert.ok(orb <= Math.max(0, heft - 20) + 0.05, `Orbital (${orb}) darf den Mindestvorsprung von 20 h nicht unterlaufen (Heften ${heft})`);
       assert.ok(heft - orb <= 30 + 0.05, `Maximalvorsprung überschritten: ${heft - orb}`);
@@ -430,7 +430,7 @@ test('Arbeitsgangzeit ändern rechnet alle betroffenen Projekte neu (§8)', () =
   const templates = fullTemplates();
   const mk = (orbitalHours) => {
     const t = JSON.parse(JSON.stringify(templates));
-    t.NEUBAU_FT40.steps.find((s) => s.opId === 'ORBITAL').hours = orbitalHours;
+    t.NEUBAU_FT40.steps.find((s) => s.opId === 'ORBITAL_KEHLNAHT').hours = orbitalHours;
     return {
       config: testConfig(),
       templates: t,

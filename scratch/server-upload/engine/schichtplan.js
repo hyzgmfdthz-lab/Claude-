@@ -142,7 +142,7 @@ export function koepfeJeSchicht(config, opId) {
    * die Fruehschicht kuenstlich aufgeblaeht (11 statt 8 Leute), sodass die
    * Spaetschicht leer blieb.
    */
-  if (opId === 'ORBITAL') {
+  if (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') {
     const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));
     return Math.max(1, Math.floor(Number(plaetze) / jeSchweisser));
   }
@@ -540,7 +540,7 @@ export function fehlendePlaetze(config, result, schichten) {
      * Schweisser, und eine zweite Schicht hilft nur mit schichtfaehigen
      * Schweissern.
      */
-    const ueberMaschinen = opId === 'ORBITAL';
+    const ueberMaschinen = opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT';
     const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));
     out.push({
       opId,
@@ -645,9 +645,20 @@ export function wochenSchichten(config, wochen, personen) {
   for (let sn = 1; sn <= maxSchichten; sn++) {
     let alle = 0;
     let exklusiv = 0;
+    /*
+     * Geteilter Kapazitaetstopf (Nutzerauftrag 23.09.2026): Kehlnaht und
+     * Stumpfnaht Orbital teilen sich dieselben Koepfe - sonst wuerden hier
+     * doppelt so viele Schweisser verlangt, wie es Maschinen gibt.
+     */
+    const gezaehlteGruppen = new Set();
     for (const [opId, n] of Object.entries(schichten)) {
       const stufen = Math.max(1, Math.floor(n));
       if (stufen < sn) continue;
+      const gruppe = OPERATION_BY_ID[opId]?.capacityGroup;
+      if (gruppe) {
+        if (gezaehlteGruppen.has(gruppe)) continue;
+        gezaehlteGruppen.add(gruppe);
+      }
       const koepfe = koepfeJeSchicht(config, opId);
       alle += koepfe;
       if (stufen === sn && sn === 1) exklusiv += koepfe;

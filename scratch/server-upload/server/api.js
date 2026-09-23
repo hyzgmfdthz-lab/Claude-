@@ -16,7 +16,7 @@ import {
   parseRuleText, checkRules, ruleSummary, hasError, emptyRule, RULE_TYPES,
   assignPeople, personWeek, defaultTeam, peopleOf, teamOn, ZUGESAGTE_LEIHE,
   planeSchichten, mitSchichten,
-  SHIFTS, ABSENCE_KINDS,
+  SHIFTS, ABSENCE_KINDS, SKILL_LEVELS,
   weekList,
   parseAttendanceMatrix, absentPerDay, absentPerWeek,
   board, BOARD_MODE,
@@ -713,6 +713,7 @@ export function createApi(store, options = {}) {
         people: deepClone(team.people ?? []),
         operations: OPERATIONS.map((o) => ({ id: o.id, name: o.name })),
         shifts: SHIFTS,
+        skillLevels: SKILL_LEVELS,
         absenceKinds: ABSENCE_KINDS,
         sickRate: cfg.workforce?.sickRate ?? 0,
         /**
@@ -2477,6 +2478,23 @@ function migrate(dataset) {
     s.config = deepMerge(defaultConfig(), s.config ?? {});
     s.projectOverrides ??= {};
     s.measures ??= [];
+    /*
+     * Skill-Level statt Ja/Nein (Nutzerauftrag 23.09.2026). `people` ist
+     * ein Array - deepMerge ersetzt es komplett statt es zu mischen -,
+     * deshalb bekommen bestehende Personen die neuen Arbeitsgaenge
+     * (Kehlnaht/Stumpfnaht Orbital, Handschweißen, Molchen) sonst gar
+     * keinen Eintrag in ihrer Qualifikationsmatrix. Alte Ja/Nein-Werte
+     * werden dabei gleich mit uebersetzt: true -> 2 (Fortgeschritten,
+     * entspricht dem bisherigen "kann"), false -> 0 (nicht qualifiziert).
+     */
+    for (const p of s.config.workforce?.team?.people ?? []) {
+      p.skills ??= {};
+      for (const op of OPERATIONS) {
+        const v = p.skills[op.id];
+        if (typeof v === 'boolean') p.skills[op.id] = v ? 2 : 0;
+        else if (v == null) p.skills[op.id] = 2;
+      }
+    }
   }
   // Gearbeitet wird auf einem eigenen Stand, damit Aenderungen sofort wirken
   // koennen, ohne die Baseline als Referenz zu verlieren.

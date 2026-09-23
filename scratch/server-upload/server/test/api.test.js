@@ -220,7 +220,7 @@ test('Arbeitsfolge ändern rechnet betroffene Projekte neu', () => {
   const before = api.analysis('BASELINE').projects.filter((p) => p.templateKey === 'NEUBAU_FT40');
   assert.ok(before.length > 0);
   const tpl = api.state().templates.NEUBAU_FT40;
-  const steps = tpl.steps.map((s) => (s.opId === 'ORBITAL' ? { ...s, hours: s.hours + 30 } : s));
+  const steps = tpl.steps.map((s) => (s.opId === 'ORBITAL_KEHLNAHT' ? { ...s, hours: s.hours + 30 } : s));
   api.updateTemplate('NEUBAU_FT40', { steps });
   const after = api.analysis('BASELINE').projects.filter((p) => p.templateKey === 'NEUBAU_FT40');
   assert.equal(after.length, before.length);

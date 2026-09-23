@@ -28,6 +28,8 @@
  * @property {boolean} [requiresNoBo]
  * @property {number[]} [allowedWeekdays]
  * @property {boolean} [machinesPerWorker] Maschinenbelegung ergibt sich aus den Mannstunden
+ * @property {string} [capacityGroup] Arbeitsgaenge mit demselben Wert teilen sich EINEN
+ *   Kapazitaetstopf (z.B. dieselben Maschinen) - siehe scheduler.js, capacityGroupSiblings().
  */
 
 /** @type {OperationDef[]} */
@@ -47,8 +49,31 @@ export const OPERATIONS = [
   { id: 'ENTGRATEN',   name: 'Entgraten',                    short: 'Ent',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'ENTGRAT' },
   { id: 'BIEGEN',      name: 'Biegen',                       short: 'Bie',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'BIEGE' },
   { id: 'HEFTEN',      name: 'Heften',                       short: 'Hef',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'HEFTPLATZ' },
-  { id: 'ORBITAL',     name: 'Orbitalschweißen',             short: 'Orb',  kind: 'MACHINE',    unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'ORBITAL', machinesPerWorker: true },
+  /*
+   * Orbitalschweissen aufgeteilt in Kehlnaht und Stumpfnaht (Nutzerauftrag
+   * 23.09.2026: "im Arbeitsplan muss Orbitalschweißen aufgeteilt werden in
+   * Kehlnaht Orbital und Stumpfnaht Orbital"). Beide nutzen dieselben
+   * Orbitalmaschinen und denselben Schweißer-Pool (capacityGroup 'ORBITAL',
+   * kein Reihenfolgezwang zueinander - "überlappend möglich").
+   */
+  { id: 'ORBITAL_KEHLNAHT',   name: 'Kehlnaht Orbital',       short: 'OrbK', kind: 'MACHINE',    unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'ORBITAL', machinesPerWorker: true, capacityGroup: 'ORBITAL' },
+  { id: 'ORBITAL_STUMPFNAHT', name: 'Stumpfnaht Orbital',     short: 'OrbS', kind: 'MACHINE',    unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'ORBITAL', machinesPerWorker: true, capacityGroup: 'ORBITAL' },
+  /*
+   * Handschweißen (Nutzerauftrag 23.09.2026): eigener Arbeitsgang, eigene,
+   * von Orbital unabhängige Qualifikation, 1 Platz für 1 Mann. Standardmäßig
+   * 0 h je Arbeitsplan - wird je Auftrag bei Bedarf von Hand eingestellt.
+   */
+  { id: 'HANDSCHWEISSEN', name: 'Handschweißen',              short: 'HaSw', kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'HANDSCHWEISSEN' },
   { id: 'BEIZEN',      name: 'Beizen',                       short: 'Bei',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'BEIZE' },
+  /*
+   * Molchen (Nutzerauftrag 23.09.2026: "bei Sonderprojekte muss noch der
+   * Arbeitsgang Molchen mit aufgenommen werden ... und bei Wiederkehrern
+   * muss das auch mit rein"). Wie Handschweißen standardmäßig 0 h - wird
+   * je Auftrag bei Bedarf von Hand eingestellt. Keine Platzgrenze
+   * hinterlegt (keine Angabe dazu) - begrenzt nur durch qualifizierte
+   * Personen, bis dazu etwas vorliegt.
+   */
+  { id: 'MOLCHEN',     name: 'Molchen',                      short: 'Mol',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'MOLCHEN' },
   { id: 'VORMONTAGE',  name: 'Doppelklemmring-Vormontage',   short: 'Vor',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'MONTAGE' },
   { id: 'HYDRO',       name: 'Hydroprüfung / Abdrücken',     short: 'Hyd',  kind: 'INSPECTION', unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'HYDRO', requiresNoBo: true, allowedWeekdays: [2, 3, 4] },
   { id: 'ENDKONTROLLE',name: 'Endkontrolle',                 short: 'End',  kind: 'INSPECTION', unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'QS' },
@@ -57,6 +82,17 @@ export const OPERATIONS = [
 
 /** @type {Record<string, OperationDef>} */
 export const OPERATION_BY_ID = Object.fromEntries(OPERATIONS.map((o) => [o.id, o]));
+
+/**
+ * Andere Arbeitsgaenge, die sich denselben Kapazitaetstopf teilen (siehe
+ * OperationDef.capacityGroup) - ohne den Arbeitsgang selbst.
+ * @param {string} opId @returns {string[]}
+ */
+export function capacityGroupSiblings(opId) {
+  const group = OPERATION_BY_ID[opId]?.capacityGroup;
+  if (!group) return [];
+  return OPERATIONS.filter((o) => o.id !== opId && o.capacityGroup === group).map((o) => o.id);
+}
 
 /** @param {string} id @returns {OperationDef|undefined} */
 export function operation(id) {

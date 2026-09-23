@@ -29,8 +29,11 @@ test('Arbeitsgänge werden im Satz erkannt – auch nach Sprachgebrauch der Abte
   assert.equal(findOperations('zuschnitt')[0].opId, 'SAEGEN');
   // "schweißen" in "orbitalschweißen" darf nicht doppelt zaehlen
   const orb = findOperations('orbitalschweißen dauert lange');
-  assert.equal(orb.length, 1);
-  assert.equal(orb[0].opId, 'ORBITAL');
+  // Kehlnaht und Stumpfnaht Orbital teilen sich die allgemeinen Begriffe
+  // ("orbitalschweißen", "schweißen", ...) - eine Regel ohne Nahtart soll
+  // beide treffen, sie teilen sich ohnehin denselben Kapazitätstopf.
+  assert.equal(orb.length, 2);
+  assert.deepEqual(orb.map((o) => o.opId).sort(), ['ORBITAL_KEHLNAHT', 'ORBITAL_STUMPFNAHT']);
 });
 
 test('Beispiel 1 der Abteilung wird richtig übersetzt', () => {
@@ -239,7 +242,7 @@ function kleinerFall(rules = [], over = {}) {
     config,
     templates: {
       NEUBAU_FT40: template('NEUBAU_FT40', 'Test', {
-        SAEGEN: 10, ENTGRATEN: 10, BIEGEN: 10, HEFTEN: 10, ORBITAL: 10, BEIZEN: 10, VORMONTAGE: 10, HYDRO: 10, ENDKONTROLLE: 10,
+        SAEGEN: 10, ENTGRATEN: 10, BIEGEN: 10, HEFTEN: 10, ORBITAL_KEHLNAHT: 10, BEIZEN: 10, VORMONTAGE: 10, HYDRO: 10, ENDKONTROLLE: 10,
       }),
     },
     projects: [createProject({
@@ -309,7 +312,7 @@ test('Regel „parallel" hebt die Abhängigkeit auf', () => {
     'REINIGEN ist in dieser Vorlage nicht enthalten – die Regel darf nichts erfinden');
 
   // Auf einen vorhandenen Arbeitsgang angewendet, faellt die Abhaengigkeit weg
-  const regel2 = { ...regel, params: { ...regel.params, opId: 'BEIZEN', afterOpId: 'ORBITAL' } };
+  const regel2 = { ...regel, params: { ...regel.params, opId: 'BEIZEN', afterOpId: 'ORBITAL_KEHLNAHT' } };
   const input2 = kleinerFall([regel2]);
   assert.deepEqual(input2.projects[0].ruleOverrides.BEIZEN.predecessors, []);
   const mit = runSchedule(input2);

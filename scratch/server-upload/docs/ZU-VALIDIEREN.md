@@ -42,6 +42,10 @@ Kosten (ausdrückliche Vorgabe).
 | Arbeitsplan Reparatur | aus der Umbaufolge abgeleitet (60 h) | Nicht in der Quelldatei enthalten. |
 | Arbeitsplan Sonderprojekt | aus der Neubaufolge abgeleitet (250 h) | Nicht in der Quelldatei enthalten. |
 | Arbeitsplan Kleinauftrag/Zubehör | Folge steht, Zeiten 0 | Zeiten liegen nicht vor; der Aufwand läuft über die Reserve. |
+| Kehlnaht/Stumpfnaht Orbital, Stundenaufteilung | festes Verhältnis 1:2 (Nutzerentscheidung 23.09.2026) | Auf ausdrücklichen Wunsch automatisch auf alle bestehenden Orbital-Zeiten angewandt statt echte Einzelwerte je Auftragsart abzuwarten – ist keine gemessene Aufteilung. |
+| Molchen, Position im Arbeitsplan | nach Beizen, vor Vormontage | **Neu.** Keine Vorgabe zur genauen Position erhalten (23.09.2026) – naheliegende Annahme, mit der Abteilung abzugleichen. |
+| Molchen, Platzgrenze | keine (nur Personal begrenzt) | Keine Angabe erhalten, ob es einen eigenen Arbeitsplatz mit fester Anzahl gibt. |
+| Skill-Level je Person und Arbeitsgang | 2 (Fortgeschritten) für alle, die zuvor „kann" (Haken) waren | **Neu (23.09.2026).** Ersetzt den bisherigen Ja/Nein-Haken. Der Startwert 2 ist eine Annahme (entspricht dem alten „kann"), keine echten Stufen – die Abteilung muss die tatsächlichen Skill-Level je Person noch pflegen. |
 | Arbeitsgangzeiten je MEGC-Variante | alle Neubauvarianten gleich | Eine Differenzierung nach 20/30/40/45 ft liegt nicht vor. |
 
 ## 4. Termine und Restriktionen

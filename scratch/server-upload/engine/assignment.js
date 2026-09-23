@@ -262,7 +262,15 @@ export function assignPeople(result, config, range = {}) {
            */
           let beste = null;
           for (let sn = 1; sn <= opSchichten; sn++) {
-            const drauf = besetzt(`${a.opId}#${sn}`);
+            /*
+             * Geteilter Platz (Nutzerauftrag 23.09.2026): Kehlnaht und
+             * Stumpfnaht Orbital teilen sich dieselben Maschinen - wer dort
+             * schon steht, blockiert denselben Platz auch fuer den jeweils
+             * anderen Arbeitsgang. Der Schluessel gilt deshalb je
+             * Kapazitaetstopf (capacityGroup), nicht je Arbeitsgang.
+             */
+            const gruppe = OPERATION_BY_ID[a.opId]?.capacityGroup ?? a.opId;
+            const drauf = besetzt(`${gruppe}#${sn}`);
             const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
             const frei = anwesend.filter((p) => p.skills?.[a.opId] && rest[p.id] > 0.01
               && (schichtVon[p.id] ?? 1) === sn
@@ -285,6 +293,16 @@ export function assignPeople(result, config, range = {}) {
            * wie alle anderen.
            */
           koennen.sort((x, y) => {
+            /*
+             * Skill-Rangfolge zuerst (Nutzerauftrag 23.09.2026: "Wenn MA xy
+             * mit dem besten skill nicht da ist wird er durch denjenigen
+             * mit dem nächst höheren ersetzt"). Wirkt nur auf die
+             * Reihenfolge, nicht auf die Arbeitszeit - bei Gleichstand
+             * entscheidet wie bisher die Auslastung.
+             */
+            const skillX = Number(x.skills?.[a.opId] ?? 0);
+            const skillY = Number(y.skills?.[a.opId] ?? 0);
+            if (skillX !== skillY) return skillY - skillX;
             const lx = byPerson[x.id].hours / Math.max(0.1, byPerson[x.id].factor);
             const ly = byPerson[y.id].hours / Math.max(0.1, byPerson[y.id].factor);
             if (Math.abs(lx - ly) > 0.01) return lx - ly;
@@ -501,9 +519,11 @@ export function assignPeople(result, config, range = {}) {
  * @param {any} config @param {string} opId @param {any} day Tagesreihe
  */
 function plaetzeAm(config, opId, day) {
-  if (opId === 'ORBITAL') {
+  if (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') {
     // Die Maschinen begrenzen die Schweisser: ein Schweisser bedient
-    // mehrere Maschinen, mehr Schweisser bringen also nichts.
+    // mehrere Maschinen, mehr Schweisser bringen also nichts. Kehlnaht und
+    // Stumpfnaht teilen sich denselben Maschinen-Topf (siehe oben, geteilter
+    // Platz-Schluessel).
     const nutzbar = Number(day?.resources?.orbitalMachinesUsable
       ?? placesFor(config, 'ORBITAL') ?? 0);
     const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));

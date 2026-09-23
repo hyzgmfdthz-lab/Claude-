@@ -153,7 +153,8 @@ export function workplaceLoad(result, workplaces, weeks) {
     const type = OPERATION_BY_ID[op.id].workplaceType;
     const places = countFor(type, op.id);
     if (places <= 0) continue;
-    const machineFactor = op.id === 'ORBITAL' ? perWelder : 1;
+    const istOrbital = op.id === 'ORBITAL_KEHLNAHT' || op.id === 'ORBITAL_STUMPFNAHT';
+    const machineFactor = istOrbital ? perWelder : 1;
     /*
      * Aushilfe (Nutzeranforderung 25.09.2026) hebt die Platzgrenze bewusst
      * an diesem Arbeitsgang - sonst schiene die Auslastung hier ueber
@@ -200,7 +201,14 @@ export function workplaceLoad(result, workplaces, weeks) {
       name: op.name,
       type,
       places,
-      unit: op.id === 'ORBITAL' ? 'Maschinenstunden' : 'Platzstunden',
+      unit: istOrbital ? 'Maschinenstunden' : 'Platzstunden',
+      /*
+       * Kehlnaht und Stumpfnaht Orbital teilen sich denselben Maschinen-
+       * /Schweißer-Topf (Nutzerauftrag 23.09.2026) - die hier gezeigte
+       * Kapazität gilt für BEIDE zusammen, nicht für jeden einzeln zusätzlich.
+       */
+      sharedCapacityWith: istOrbital
+        ? (op.id === 'ORBITAL_KEHLNAHT' ? 'ORBITAL_STUMPFNAHT' : 'ORBITAL_KEHLNAHT') : null,
       workplaceNames: (byType[type] ?? []).map((w) => w.name),
       totalHours,
       /** Mögliche Belegungsstunden über den gesamten Zeitraum */
@@ -511,7 +519,7 @@ export function dashboardKpis(result, weeks, range = {}) {
    * `windowEnd`), nicht `lastRelevant` (das Ende des ganzen
    * Auftragsbestands, unabhaengig von der Auswahl).
    */
-  const orbital = processUtilization(result, 'ORBITAL', windowEnd, windowStart);
+  const orbital = orbitalUtilization(result, windowEnd, windowStart);
   const heft = processUtilization(result, 'HEFTEN', windowEnd, windowStart);
   const shortfall = deadlineShortfall(result, windowEnd);
 
@@ -673,6 +681,39 @@ export function processUtilization(result, opId, until, from = null) {
     opId,
     name: OPERATION_BY_ID[opId]?.name ?? opId,
     unit: OPERATION_BY_ID[opId]?.unit,
+    capacity: round2(cap),
+    used: round2(used),
+    utilization: cap > 0 ? round2((used / cap) * 100) : 0,
+    days: capDays,
+  };
+}
+
+/**
+ * Kombinierte Auslastung von Kehlnaht und Stumpfnaht Orbital - dieselbe
+ * Ergebnisform wie processUtilization(), aber ueber den GEMEINSAMEN
+ * Maschinentopf gerechnet (Nutzerauftrag 23.09.2026): die Kapazitaet wird
+ * nur einmal gezaehlt, der Verbrauch aus beiden Arbeitsgaengen zusammen.
+ * @param {any} result @param {string|null} until @param {string|null} [from]
+ */
+function orbitalUtilization(result, until, from = null) {
+  let cap = 0;
+  let used = 0;
+  let capDays = 0;
+  for (const d of result.daySeries) {
+    if (from && cmpDate(d.date, from) < 0) continue;
+    if (until && cmpDate(d.date, until) > 0) break;
+    const kehl = d.byOp.ORBITAL_KEHLNAHT;
+    const stumpf = d.byOp.ORBITAL_STUMPFNAHT;
+    if (!kehl && !stumpf) continue;
+    const capHeute = kehl?.capUnits ?? stumpf?.capUnits ?? 0;
+    cap += capHeute;
+    used += (kehl?.usedUnits ?? 0) + (stumpf?.usedUnits ?? 0);
+    if (capHeute > 0) capDays++;
+  }
+  return {
+    opId: 'ORBITAL',
+    name: 'Orbitalschweißen (Kehlnaht + Stumpfnaht)',
+    unit: 'Mannstunden',
     capacity: round2(cap),
     used: round2(used),
     utilization: cap > 0 ? round2((used / cap) * 100) : 0,
@@ -975,11 +1016,18 @@ export function orbitalReport(result, until, from = null) {
   for (const d of result.daySeries) {
     if (from && cmpDate(d.date, from) < 0) continue;
     if (until && cmpDate(d.date, until) > 0) break;
-    const v = d.byOp.ORBITAL;
-    if (!v || d.poolCapacity <= 0) continue;
-    machineHoursCap += v.capUnits;
-    machineHoursNeeded += v.usedUnits;
-    manHours += v.usedManHours;
+    const kehl = d.byOp.ORBITAL_KEHLNAHT;
+    const stumpf = d.byOp.ORBITAL_STUMPFNAHT;
+    if ((!kehl && !stumpf) || d.poolCapacity <= 0) continue;
+    /*
+     * Kehlnaht und Stumpfnaht teilen sich denselben Maschinen-Topf
+     * (Nutzerauftrag 23.09.2026) - die Kapazitaet (capUnits) ist bei
+     * beiden gleich hoch und wird deshalb nur EINMAL gezaehlt. Verbraucht
+     * (usedUnits/usedManHours) wird dagegen aus BEIDEN zusammengezaehlt.
+     */
+    machineHoursCap += kehl?.capUnits ?? stumpf?.capUnits ?? 0;
+    machineHoursNeeded += (kehl?.usedUnits ?? 0) + (stumpf?.usedUnits ?? 0);
+    manHours += (kehl?.usedManHours ?? 0) + (stumpf?.usedManHours ?? 0);
     welderSum += d.resources.welders;
     usableSum += d.resources.orbitalMachinesUsable;
     days++;

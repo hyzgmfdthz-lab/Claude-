@@ -9,7 +9,9 @@
  */
 
 import { OPERATIONS, OPERATION_BY_ID, round2 } from './model.js';
-import { teamOn, skillShares, mentoringHoursOfTeam } from './team.js';
+import {
+  teamOn, skillShares, mentoringHoursOfTeam, personEffectiveFactor,
+} from './team.js';
 import { weekday, weekKey, diffDays, mondayOf } from './calendar.js';
 
 /** @type {{REGULAR:'REGULAR', SATURDAY:'SATURDAY', OFF:'OFF'}} */
@@ -331,15 +333,22 @@ export function placesFor(config, opId) {
   const res = config.resources ?? {};
   // Platzgrenzen lassen sich gemeinsam abschalten - zum Vergleich "mit und
   // ohne", nicht fuer den Dauerbetrieb.
-  if (res.enforcePlaces === false && opId !== 'ORBITAL' && opId !== 'HEFTEN') return null;
+  if (res.enforcePlaces === false && opId !== 'ORBITAL' && opId !== 'ORBITAL_KEHLNAHT'
+    && opId !== 'ORBITAL_STUMPFNAHT' && opId !== 'HEFTEN' && opId !== 'HANDSCHWEISSEN') return null;
   const own = res.byOperation?.[opId]?.places;
   if (own != null && own !== '') return Math.max(0, Number(own));
+  /*
+   * Kehlnaht und Stumpfnaht Orbital fallen ohne eigenen Wert auf dieselbe
+   * Maschinenzahl zurueck wie die alte Ressource 'ORBITAL' (Nutzerauftrag
+   * 23.09.2026 - sie teilen sich denselben Topf).
+   */
+  const fallbackKey = (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') ? 'ORBITAL' : opId;
   const fallback = {
     HEFTEN: res.heftPlaces,
     ORBITAL: res.orbitalMachinesActive ?? res.orbitalMachines,
     HYDRO: res.hydroStations,
     BEIZEN: res.beizStations,
-  }[opId];
+  }[fallbackKey];
   if (fallback == null || fallback === '') return null;
   return Math.max(0, Number(fallback));
 }
@@ -453,7 +462,17 @@ export function weldersFor(config, date, kind) {
   if (config.workforce?.team?.source === 'MANNSCHAFT'
     && config.workforce?.team?.enforceSkills !== false) {
     const on = teamOn(config, date);
-    const n2 = on.byOp?.ORBITAL?.factor ?? 0;
+    /*
+     * Orbitalschweisser = wer fuer Kehlnaht ODER Stumpfnaht qualifiziert
+     * ist (Vereinigungsmenge, nicht Summe - sonst zaehlte eine fuer beides
+     * qualifizierte Person doppelt). Beide teilen sich denselben
+     * Maschinen-/Schweisser-Pool (siehe model.js, capacityGroup).
+     */
+    const kehl = on.byOp?.ORBITAL_KEHLNAHT?.ids ?? [];
+    const stumpf = on.byOp?.ORBITAL_STUMPFNAHT?.ids ?? [];
+    const idSet = new Set([...kehl, ...stumpf]);
+    const n2 = on.present.filter((p) => idSet.has(p.id))
+      .reduce((a, p) => a + personEffectiveFactor(config, p, date), 0);
     return kind === DAY_KIND.SATURDAY ? round2(n2 * saturdayQuota(config, date)) : round2(n2);
   }
   let n;
@@ -624,7 +643,15 @@ export function dayCapacity(config, date) {
       const placeCap = heftPlaces * workersPerHeftPlace * opWindow * prod;
       detail.heftPlaceCap = round2(placeCap);
       if (placeCap < capUnits) { capUnits = placeCap; limiter = LIMITER.HEFTPLATZ; }
-    } else if (op.id === 'ORBITAL') {
+    } else if (op.id === 'ORBITAL_KEHLNAHT' || op.id === 'ORBITAL_STUMPFNAHT') {
+      /*
+       * Kehlnaht und Stumpfnaht teilen sich denselben Maschinen-/
+       * Schweißer-Pool - hier bekommt deshalb JEDER der beiden Arbeitsgaenge
+       * dieselbe Obergrenze (das, was der GANZE Topf hergeben wuerde). Dass
+       * die beiden sich den Topf teilen und nicht gemeinsam das Doppelte
+       * bekommen, stellt scheduler.js sicher (capacityGroupSiblings): was
+       * der eine verbraucht, wird dem anderen ebenfalls abgezogen.
+       */
       // Arbeitsinhalt in Mannstunden. Zwei getrennte Restriktionen:
       //  - Maschinen: je Schweisser koennen mehrere Maschinen bedient werden,
       //    die Maschinen begrenzen daher die gleichzeitig einsetzbaren Schweisser.

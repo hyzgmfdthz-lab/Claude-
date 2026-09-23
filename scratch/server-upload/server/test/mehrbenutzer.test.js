@@ -313,6 +313,50 @@ test('Vollständige Datensicherung als JSON: nur die Verwaltung darf', () => {
   assert.ok(Array.isArray(geladen.users) && geladen.users.some((u) => u.id === 'DOHE'));
 });
 
+test('Migration: alte Ja/Nein-Qualifikation wird zu Skill-Level übersetzt', () => {
+  /*
+   * Nutzerauftrag 23.09.2026: Skill-Level (0-3) statt Ja/Nein in der
+   * Qualifikationsmatrix. `people` ist ein Array - deepMerge ersetzt es
+   * komplett statt es zu mischen -, deshalb muss migrate() bestehende
+   * Personen sowohl um die neuen Arbeitsgänge ergänzen als auch alte
+   * Ja/Nein-Werte in Zahlen übersetzen (true -> 2, false -> 0).
+   */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'megc-migrate-'));
+  const store = openStore(dir, { forceFile: true });
+  store.save({
+    meta: { version: 1, createdAt: new Date().toISOString() },
+    projects: [],
+    scenarios: [{
+      id: 'BASELINE', name: 'Baseline', isBaseline: true, createdAt: new Date().toISOString(),
+      config: {
+        workforce: {
+          team: {
+            source: 'MANNSCHAFT',
+            people: [{
+              id: 'ALT', label: '', role: '', kind: 'STAMM', factor: 1, rate: null,
+              shiftCapable: true, absences: [], weeks: {}, startDate: null, endDate: null,
+              defaultActive: true, active: true, note: '',
+              skills: { SAEGEN: true, ENTGRATEN: false },
+            }],
+          },
+        },
+      },
+      projectOverrides: {}, sequenceOverride: null,
+    }],
+  }, 'Ausgangsstand');
+
+  const api = createApi(store);
+  const person = api.scenarioConfig('BASELINE').config.workforce.team.people
+    .find((p) => p.id === 'ALT');
+  assert.equal(person.skills.SAEGEN, 2, 'true wird zu 2 (Fortgeschritten)');
+  assert.equal(person.skills.ENTGRATEN, 0, 'false wird zu 0 (nicht qualifiziert)');
+  // Neue Arbeitsgaenge (Kehlnaht/Stumpfnaht Orbital, Handschweißen, Molchen)
+  // muessen ergaenzt werden, nicht fehlen
+  assert.equal(person.skills.ORBITAL_KEHLNAHT, 2);
+  assert.equal(person.skills.HANDSCHWEISSEN, 2);
+  assert.equal(person.skills.MOLCHEN, 2);
+});
+
 test('Änderungsprotokoll: Mannschaftsänderung wird lesbar zusammengefasst', () => {
   /*
    * FIX (gefunden 21.09.2026 anhand eines Screenshots): eine Änderung an
@@ -549,8 +593,8 @@ test('„Entfernen" leert Wochenwerte, Samstage und eigene Werte je Arbeitsgang 
   assert.equal(Object.keys(api.scenarioConfig('ARBEITSSTAND').config.saturday.weeks).length, 0);
 
   // Eigene Werte je Arbeitsgang
-  api.updateScenario('ARBEITSSTAND', { config: { resources: { byOperation: { ORBITAL: { operatingHours: 22.5 } } } } });
-  assert.equal(api.scenarioConfig('ARBEITSSTAND').config.resources.byOperation.ORBITAL.operatingHours, 22.5);
+  api.updateScenario('ARBEITSSTAND', { config: { resources: { byOperation: { ORBITAL_KEHLNAHT: { operatingHours: 22.5 } } } } });
+  assert.equal(api.scenarioConfig('ARBEITSSTAND').config.resources.byOperation.ORBITAL_KEHLNAHT.operatingHours, 22.5);
   api.updateScenario('ARBEITSSTAND', { clear: ['resources.byOperation'] });
   assert.deepEqual(api.scenarioConfig('ARBEITSSTAND').config.resources.byOperation, {});
 });

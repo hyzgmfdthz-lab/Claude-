@@ -157,8 +157,9 @@ test('Analyse: Ergebnis enthält alle Auswertungsbausteine', () => {
   }
   assert.ok(a.days.length > 0);
   assert.ok(a.weeks.length > 0);
-  // Zehn Arbeitsgaenge der Werkstatt plus die Arbeitsvorbereitung
-  assert.equal(a.processBalance.length, 11);
+  // 13 Arbeitsgaenge der Werkstatt (Orbitalschweissen aufgeteilt in Kehlnaht
+  // und Stumpfnaht, dazu Handschweißen und Molchen) plus die Arbeitsvorbereitung
+  assert.equal(a.processBalance.length, 14);
   assert.ok(a.orbital.machinesInstalled >= 1);
   assert.ok(a.orbital.machineHoursCapacity >= a.orbital.manHoursCapacity);
   for (const p of a.projects) {
@@ -260,14 +261,17 @@ test('Zusätzlicher Arbeitsplatz wird nur vorgeschlagen, wo es ihn geben kann', 
    * kann: ein zweiter Saegeplatz (Auskunft der Abteilung), ein zweiter
    * Vorgang in der Arbeitsvorbereitung (Schreibtischarbeit, kein
    * Werkstattplatz), Entgraten ("Engpass kann ggf. von Hand mitgeholfen
-   * werden", Auskunft der Abteilungsleitung 09/2026) und ein dritter
-   * Endkontrolle-Platz ("Zusätzliche Plätze sind bei Heften, Vormontage
-   * und Endkontrolle eine Möglichkeit", bestätigt 21.09.2026). Fuer
-   * Biegen und Beizen steht ausdruecklich kein zweiter Platz zur
-   * Verfuegung - sie duerfen hier nicht auftauchen.
+   * werden", Auskunft der Abteilungsleitung 09/2026) und ein weiterer
+   * Vormontage-Platz ("Zusätzliche Plätze sind bei Heften, Vormontage
+   * und Endkontrolle eine Möglichkeit", bestätigt 21.09.2026 - welcher der
+   * drei genannten Plätze konkret vorgeschlagen wird, hängt vom
+   * tagesgenauen Engpass ab und hat sich durch die Aufteilung des
+   * Orbitalschweissens in Kehlnaht/Stumpfnaht verschoben, Nutzerauftrag
+   * 23.09.2026). Fuer Biegen und Beizen steht ausdruecklich kein zweiter
+   * Platz zur Verfuegung - sie duerfen hier nicht auftauchen.
    */
   assert.deepEqual(plaetze.map((m) => m.type).sort(),
-    ['PLACE_AV', 'PLACE_ENDKONTROLLE', 'PLACE_ENTGRATEN', 'PLACE_SAEGEN']);
+    ['PLACE_AV', 'PLACE_ENTGRATEN', 'PLACE_SAEGEN', 'PLACE_VORMONTAGE']);
   const saege = plaetze.find((m) => m.type === 'PLACE_SAEGEN');
   assert.ok(saege.label.includes('Sägen'));
   assert.ok(saege.savedLateDays > 0, 'der zweite Sägeplatz muss Verspätung abbauen');

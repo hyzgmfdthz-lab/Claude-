@@ -102,26 +102,26 @@ test('Kapazität: Orbital – Maschinen und Schweißer als getrennte Restriktion
   const c = cfg((x) => {
     x.resources.orbitalMachines = 6; x.resources.orbitalMachinesActive = 6;
     x.resources.welders = { default: 2, byWeekday: {}, byDate: {} };
-    x.skills.ORBITAL.share = 1;
+    x.skills.ORBITAL_KEHLNAHT.share = 1;
   });
   const d = dayCapacity(c, MO);
   assert.equal(d.resources.orbitalMachinesUsable, 4);
   // Arbeitsinhalt in Mannstunden: 2 Schweißer x 7,5 h
-  assert.equal(d.byOp.ORBITAL.capUnits, 15);
-  assert.equal(d.byOp.ORBITAL.limiter, LIMITER.ORBITAL_WELDER);
+  assert.equal(d.byOp.ORBITAL_KEHLNAHT.capUnits, 15);
+  assert.equal(d.byOp.ORBITAL_KEHLNAHT.limiter, LIMITER.ORBITAL_WELDER);
   // Maschinenstunden = Mannstunden x Maschinen je Schweißer
-  assert.equal(d.byOp.ORBITAL.detail.machineHoursCapacity, 45);
+  assert.equal(d.byOp.ORBITAL_KEHLNAHT.detail.machineHoursCapacity, 45);
 
   // 5 Schweißer, 6 Maschinen -> Maschinen limitieren (6/2 = 3 Schweißerplätze)
   const c2 = cfg((x) => {
     x.resources.orbitalMachines = 6; x.resources.orbitalMachinesActive = 6;
     x.resources.welders = { default: 5, byWeekday: {}, byDate: {} };
-    x.skills.ORBITAL.share = 1;
+    x.skills.ORBITAL_KEHLNAHT.share = 1;
   });
   const d2 = dayCapacity(c2, MO);
   assert.equal(d2.resources.orbitalMachinesUsable, 6);
-  assert.equal(d2.byOp.ORBITAL.limiter, LIMITER.ORBITAL_MACHINE);
-  assert.equal(d2.byOp.ORBITAL.capUnits, 3 * 7.5);
+  assert.equal(d2.byOp.ORBITAL_KEHLNAHT.limiter, LIMITER.ORBITAL_MACHINE);
+  assert.equal(d2.byOp.ORBITAL_KEHLNAHT.capUnits, 3 * 7.5);
 });
 
 test('Kapazität: Mannstunden und Maschinenstunden bleiben getrennt (§54)', () => {
@@ -130,7 +130,7 @@ test('Kapazität: Mannstunden und Maschinenstunden bleiben getrennt (§54)', () 
     x.resources.machinesPerWelder = 2;
     x.resources.welders = { default: 5, byWeekday: {}, byDate: {} };
   });
-  const d = dayCapacity(c, MO).byOp.ORBITAL;
+  const d = dayCapacity(c, MO).byOp.ORBITAL_KEHLNAHT;
   assert.equal(d.capManHours, 22.5);                  // 3 Schweißer x 7,5 h
   assert.equal(d.detail.machineHoursCapacity, 45);    // 6 Maschinen x 7,5 h
   assert.equal(d.detail.machineHoursCapacity, d.capManHours * 2);
@@ -159,12 +159,12 @@ test('Kapazität: Betreuungsstunden für neue Kräfte werden abgezogen', () => {
 });
 
 test('Kapazität: Maschinenausfall senkt die Orbitalkapazität (§12)', () => {
-  const base = cfg((x) => { x.resources.welders = { default: 5, byWeekday: {}, byDate: {} }; x.skills.ORBITAL.share = 1; });
-  const before = dayCapacity(base, MO).byOp.ORBITAL.capUnits;
+  const base = cfg((x) => { x.resources.welders = { default: 5, byWeekday: {}, byDate: {} }; x.skills.ORBITAL_KEHLNAHT.share = 1; });
+  const before = dayCapacity(base, MO).byOp.ORBITAL_KEHLNAHT.capUnits;
   const after = dayCapacity(cfg((x) => {
     x.resources.welders = { default: 5, byWeekday: {}, byDate: {} };
-    x.resources.orbitalMachinesActive = 5; x.skills.ORBITAL.share = 1;
-  }), MO).byOp.ORBITAL.capUnits;
+    x.resources.orbitalMachinesActive = 5; x.skills.ORBITAL_KEHLNAHT.share = 1;
+  }), MO).byOp.ORBITAL_KEHLNAHT.capUnits;
   assert.ok(after < before, 'Weniger Maschinen müssen weniger Kapazität ergeben');
   assert.equal(round2(before - after), 3.75); // eine Maschine = eine halbe Schweißerstelle
 });

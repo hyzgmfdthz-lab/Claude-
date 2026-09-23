@@ -154,7 +154,9 @@ function arbeitsplatzZeilen(input, result, tage, projekte) {
 /** Wie viele Plaetze hat ein Arbeitsgang? */
 function platzZahl(cfg, opId) {
   if (opId === 'HEFTEN') return Number(cfg.resources?.heftPlaces ?? 1);
-  if (opId === 'ORBITAL') return Number(cfg.resources?.orbitalMachinesActive ?? cfg.resources?.orbitalMachines ?? 1);
+  if (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') {
+    return Number(cfg.resources?.orbitalMachinesActive ?? cfg.resources?.orbitalMachines ?? 1);
+  }
   const eigen = cfg.resources?.byOperation?.[opId];
   return eigen?.places == null ? null : Number(eigen.places);
 }

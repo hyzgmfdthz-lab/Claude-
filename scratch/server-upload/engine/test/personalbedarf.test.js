@@ -91,11 +91,11 @@ test('workplaceLoad liefert je Arbeitsgang eine Zeile mit einer Zelle je Woche',
 test('workplaceLoad rechnet Orbitalschweißen in Maschinenstunden', () => {
   const input = {
     config: testConfig({ resources: { machinesPerWelder: 2, orbitalMachinesActive: 6, operatingHoursPerDay: 7 } }),
-    ...load(1, 40, '2026-10-30', 'ORBITAL'),
+    ...load(1, 40, '2026-10-30', 'ORBITAL_KEHLNAHT'),
   };
   const { result, weeks } = run(input);
   const rows = workplaceLoad(result, defaultWorkplaces(), wochen(weeks));
-  const orbital = rows.find((r) => r.opId === 'ORBITAL');
+  const orbital = rows.find((r) => r.opId === 'ORBITAL_KEHLNAHT');
   assert.equal(orbital.unit, 'Maschinenstunden');
   assert.equal(orbital.places, 6);
   // 40 Mannstunden * 2 Maschinen je Schweisser = 80 Maschinenstunden
@@ -128,11 +128,23 @@ test('workplaceLoad des Startdatenbestands reicht an die Kapazitätsgrenze', () 
   const an = analyze(dataset, 'BASELINE');
   const rows = an.workplaceLoad;
   assert.ok(rows.length > 0);
-  const orbital = rows.find((r) => r.opId === 'ORBITAL');
+  /*
+   * Kehlnaht und Stumpfnaht Orbital teilen sich denselben Maschinentopf
+   * (Nutzerauftrag 23.09.2026) - "nahe an der Grenze" gilt deshalb für die
+   * ZUSAMMENGEZÄHLTE Auslastung beider, nicht für jeden einzeln (der
+   * einzelne Arbeitsgang trägt jetzt nur noch einen Teil der bisherigen
+   * Orbital-Zeit).
+   */
+  const kehl = rows.find((r) => r.opId === 'ORBITAL_KEHLNAHT');
+  const stumpf = rows.find((r) => r.opId === 'ORBITAL_STUMPFNAHT');
+  const orbitalPeak = Math.max(...kehl.cells.map((c, i) => {
+    const kombiniert = c.hours + stumpf.cells[i].hours;
+    return c.capacityHours > 0 ? (kombiniert / c.capacityHours) * 100 : 0;
+  }));
   // Die Auslastung rechnet mit derselben Belegungszeit wie die Terminierung:
   // mindestens so lange, wie ein Mitarbeiter arbeitet (7,5 h), auch wenn
   // 7 h eingestellt sind.
-  assert.ok(orbital.peak >= 90, `Orbital muss nahe an die Grenze kommen, war ${orbital.peak}`);
+  assert.ok(orbitalPeak >= 90, `Orbital (Kehlnaht+Stumpfnaht) muss nahe an die Grenze kommen, war ${orbitalPeak}`);
   // Seit die Plaetze der Werkstatt in der Rechnung wirken, kann kein Platz
   // ueber 100 % kommen - die Ueberlast zeigt sich stattdessen als Arbeit,
   // die liegenbleibt.
@@ -177,7 +189,7 @@ test('requiredAdditionalStaff sagt ehrlich, wenn Personal allein nicht hilft', (
     config: testConfig({
       resources: { orbitalMachines: 1, orbitalMachinesActive: 1, machinesPerWelder: 2, welders: { default: 1 }, operatingHoursPerDay: 7 },
     }),
-    ...load(6, 200, '2026-09-25', 'ORBITAL'),
+    ...load(6, 200, '2026-09-25', 'ORBITAL_KEHLNAHT'),
   };
   const r = requiredAdditionalStaff(input, { maxStaff: 20 });
   assert.equal(r.solved, false);
@@ -287,7 +299,7 @@ test('workplaceLoad weist Gesamtauslastung und überlastete Wochen aus', () => {
 test('workplaceLoad weist nicht einplanbare Stunden je Arbeitsgang aus', () => {
   const dataset = seedDataset();
   const an = analyze(dataset, 'BASELINE');
-  const orbital = an.workplaceLoad.find((r) => r.opId === 'ORBITAL');
+  const orbital = an.workplaceLoad.find((r) => r.opId === 'ORBITAL_KEHLNAHT');
   // Der Engpass des Startdatenbestands ist das Orbitalschweissen. Die
   // Auslastung allein zeigt ihn nicht (sie liegt unter 100 %), die nicht
   // einplanbaren Stunden schon.
@@ -320,8 +332,8 @@ test('Der angewählte Zeitraum bestimmt jede Auswertung', () => {
     `${weit.weeks.length} Wochen müssen mehr sein als ${eng.weeks.length}`);
   assert.ok(weit.kpis.availableHours > eng.kpis.availableHours,
     'im größeren Zeitraum steht mehr Kapazität');
-  const o1 = eng.workplaceLoad.find((r) => r.opId === 'ORBITAL');
-  const o2 = weit.workplaceLoad.find((r) => r.opId === 'ORBITAL');
+  const o1 = eng.workplaceLoad.find((r) => r.opId === 'ORBITAL_KEHLNAHT');
+  const o2 = weit.workplaceLoad.find((r) => r.opId === 'ORBITAL_KEHLNAHT');
   assert.ok(o2.totalCapacityHours > o1.totalCapacityHours,
     'auch das Belegungsgitter folgt dem Zeitraum');
 

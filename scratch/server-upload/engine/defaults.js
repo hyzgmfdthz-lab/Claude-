@@ -33,13 +33,39 @@ import { defaultTeam } from './team.js';
  */
 const AV_STUNDEN = 7.5;
 
+/**
+ * Teilt eine bisherige Orbitalschweiss-Zeit im Verhaeltnis 1:2 auf Kehlnaht
+ * und Stumpfnaht auf (Nutzerauftrag 23.09.2026, Beispiel "90 Stunden, davon
+ * 30h Kehlnaht und 60h Stumpfnaht" - festes Verhaeltnis, auf Wunsch des
+ * Nutzers auf alle Arbeitsplaene angewandt statt echte Einzelwerte
+ * abzuwarten). Stumpfnaht wird als Rest gerechnet, damit die Summe exakt
+ * der bisherigen Orbitalzeit entspricht (keine Rundungsdrift).
+ * @param {number} total
+ */
+function splitOrbital(total) {
+  const kehlnaht = Math.round((total / 3) * 100) / 100;
+  return { ORBITAL_KEHLNAHT: kehlnaht, ORBITAL_STUMPFNAHT: Math.round((total - kehlnaht) * 100) / 100 };
+}
+
 const HOURS = {
   /** Neubau: Summe 247,75 h + 7,5 h Arbeitsvorbereitung */
-  NEUBAU: { AV: AV_STUNDEN, SAEGEN: 18, ENTGRATEN: 20.75, BIEGEN: 13, HEFTEN: 38.75, ORBITAL: 90.25, BEIZEN: 17.75, VORMONTAGE: 12.25, HYDRO: 17, ENDKONTROLLE: 20 },
+  NEUBAU: {
+    AV: AV_STUNDEN, SAEGEN: 18, ENTGRATEN: 20.75, BIEGEN: 13, HEFTEN: 38.75,
+    ...splitOrbital(90.25), HANDSCHWEISSEN: 0,
+    BEIZEN: 17.75, MOLCHEN: 0, VORMONTAGE: 12.25, HYDRO: 17, ENDKONTROLLE: 20,
+  },
   /** Umbau und Pruefer: Summe 106,5 h + 7,5 h Arbeitsvorbereitung */
-  UMBAU: { AV: AV_STUNDEN, SAEGEN: 6, ENTGRATEN: 6.5, BIEGEN: 7.5, HEFTEN: 19.5, ORBITAL: 45, BEIZEN: 6, VORMONTAGE: 4, HYDRO: 5.5, ENDKONTROLLE: 6.5 },
+  UMBAU: {
+    AV: AV_STUNDEN, SAEGEN: 6, ENTGRATEN: 6.5, BIEGEN: 7.5, HEFTEN: 19.5,
+    ...splitOrbital(45), HANDSCHWEISSEN: 0,
+    BEIZEN: 6, MOLCHEN: 0, VORMONTAGE: 4, HYDRO: 5.5, ENDKONTROLLE: 6.5,
+  },
   /** Wiederkehrer ISO: Summe 257 h (einschliesslich Reinigen) + 7,5 h AV */
-  WKP: { AV: AV_STUNDEN, SAEGEN: 18, ENTGRATEN: 21, BIEGEN: 13, HEFTEN: 39, ORBITAL: 91, BEIZEN: 18, VORMONTAGE: 12.5, HYDRO: 17, ENDKONTROLLE: 20, REINIGEN: 7.5 },
+  WKP: {
+    AV: AV_STUNDEN, SAEGEN: 18, ENTGRATEN: 21, BIEGEN: 13, HEFTEN: 39,
+    ...splitOrbital(91), HANDSCHWEISSEN: 0,
+    BEIZEN: 18, MOLCHEN: 0, VORMONTAGE: 12.5, HYDRO: 17, ENDKONTROLLE: 20, REINIGEN: 7.5,
+  },
   /**
    * Kleinauftrag / Zubehoer.
    *
@@ -54,7 +80,10 @@ const HOURS = {
    * des Zubehoers geht ueber die Reserve (12-24 Mannstunden je Woche) in
    * die Rechnung ein - dieselben Stunden also, nicht zusaetzlich.
    */
-  ZUBEHOER: { AV: 0, SAEGEN: 0, BIEGEN: 0, ORBITAL: 0, BEIZEN: 0, VORMONTAGE: 0, HYDRO: 0, ENDKONTROLLE: 0 },
+  ZUBEHOER: {
+    AV: 0, SAEGEN: 0, BIEGEN: 0, ORBITAL_KEHLNAHT: 0, ORBITAL_STUMPFNAHT: 0, HANDSCHWEISSEN: 0,
+    BEIZEN: 0, MOLCHEN: 0, VORMONTAGE: 0, HYDRO: 0, ENDKONTROLLE: 0,
+  },
 };
 
 /**
@@ -83,9 +112,33 @@ function defaultNetwork(withCleaning) {
     { opId: 'ENTGRATEN', predecessors: [{ opId: 'SAEGEN', type: DEP_TYPE.FS }] },
     { opId: 'BIEGEN', predecessors: [{ opId: 'ENTGRATEN', type: DEP_TYPE.FS }] },
     { opId: 'HEFTEN', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
-    { opId: 'ORBITAL', predecessors: [{ opId: 'HEFTEN', type: DEP_TYPE.OVERLAP }] },
-    { opId: 'BEIZEN', predecessors: [{ opId: 'ORBITAL', type: DEP_TYPE.FS }] },
-    { opId: 'VORMONTAGE', predecessors: [{ opId: 'BEIZEN', type: DEP_TYPE.FS }] },
+    /*
+     * Kehlnaht und Stumpfnaht Orbital (Nutzerauftrag 23.09.2026): beide
+     * ueberlappend mit Heften, KEIN Reihenfolgezwang zueinander ("Überlappend
+     * möglich" - beide koennen parallel laufen, sie teilen sich nur den
+     * Maschinen-/Schweißer-Pool, siehe scheduler.js). Handschweißen ebenso
+     * ueberlappend - eigene Qualifikation, standardmaessig 0 h.
+     */
+    { opId: 'ORBITAL_KEHLNAHT', predecessors: [{ opId: 'HEFTEN', type: DEP_TYPE.OVERLAP }] },
+    { opId: 'ORBITAL_STUMPFNAHT', predecessors: [{ opId: 'HEFTEN', type: DEP_TYPE.OVERLAP }] },
+    { opId: 'HANDSCHWEISSEN', predecessors: [{ opId: 'HEFTEN', type: DEP_TYPE.OVERLAP }] },
+    {
+      opId: 'BEIZEN',
+      predecessors: [
+        { opId: 'ORBITAL_KEHLNAHT', type: DEP_TYPE.FS },
+        { opId: 'ORBITAL_STUMPFNAHT', type: DEP_TYPE.FS },
+        { opId: 'HANDSCHWEISSEN', type: DEP_TYPE.FS },
+      ],
+    },
+    /*
+     * Molchen (Nutzerauftrag 23.09.2026): nach Beizen, vor Vormontage -
+     * keine Vorgabe zur genauen Position erhalten, das ist eine
+     * naheliegende Annahme (Leitung innen reinigen, bevor verschraubt und
+     * geprueft wird). Standardmaessig 0 h wie Handschweißen, blockiert
+     * dadurch nichts, bis je Auftrag Stunden eingetragen werden.
+     */
+    { opId: 'MOLCHEN', predecessors: [{ opId: 'BEIZEN', type: DEP_TYPE.FS }] },
+    { opId: 'VORMONTAGE', predecessors: [{ opId: 'MOLCHEN', type: DEP_TYPE.FS }] },
     { opId: 'HYDRO', predecessors: [{ opId: 'VORMONTAGE', type: DEP_TYPE.FS }] },
     { opId: 'ENDKONTROLLE', predecessors: [{ opId: 'HYDRO', type: DEP_TYPE.FS }] },
   ];
@@ -108,9 +161,19 @@ function zubehoerNetwork() {
     { opId: 'AV', predecessors: [] },
     { opId: 'SAEGEN', predecessors: [{ opId: 'AV', type: DEP_TYPE.FS }] },
     { opId: 'BIEGEN', predecessors: [{ opId: 'SAEGEN', type: DEP_TYPE.FS }] },
-    { opId: 'ORBITAL', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
-    { opId: 'BEIZEN', predecessors: [{ opId: 'ORBITAL', type: DEP_TYPE.FS }] },
-    { opId: 'VORMONTAGE', predecessors: [{ opId: 'BEIZEN', type: DEP_TYPE.FS }] },
+    { opId: 'ORBITAL_KEHLNAHT', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
+    { opId: 'ORBITAL_STUMPFNAHT', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
+    { opId: 'HANDSCHWEISSEN', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
+    {
+      opId: 'BEIZEN',
+      predecessors: [
+        { opId: 'ORBITAL_KEHLNAHT', type: DEP_TYPE.FS },
+        { opId: 'ORBITAL_STUMPFNAHT', type: DEP_TYPE.FS },
+        { opId: 'HANDSCHWEISSEN', type: DEP_TYPE.FS },
+      ],
+    },
+    { opId: 'MOLCHEN', predecessors: [{ opId: 'BEIZEN', type: DEP_TYPE.FS }] },
+    { opId: 'VORMONTAGE', predecessors: [{ opId: 'MOLCHEN', type: DEP_TYPE.FS }] },
     { opId: 'HYDRO', predecessors: [{ opId: 'VORMONTAGE', type: DEP_TYPE.FS }] },
     { opId: 'ENDKONTROLLE', predecessors: [{ opId: 'HYDRO', type: DEP_TYPE.FS }] },
   ];
@@ -191,11 +254,13 @@ export function defaultWorkplaces() {
   add('HE03', 'Heftplatz 3 · Reserve', 'HEFTPLATZ', false, 'Nur im Engpassszenario zugelassen.');
   for (let i = 1; i <= 6; i++) add(`OR0${i}`, `Orbitalmaschine ${i}`, 'ORBITAL');
   add('BE01', 'Beizen', 'BEIZE');
+  add('MO01', 'Molchen', 'MOLCHEN', true, 'Keine Platzgrenze hinterlegt – dazu liegt keine Angabe vor.');
   add('DK01', 'DKR-Vormontage 1', 'MONTAGE');
   add('DK02', 'DKR-Vormontage 2 · Reserve', 'MONTAGE', false, 'Ohne zusätzliche Besetzung Reserve.');
   add('HY01', 'Hydroprüfung', 'HYDRO', true, 'Ausschließlich Dienstag bis Donnerstag.');
   add('EK01', 'Endkontrolle', 'QS');
   add('RE01', 'Reinigen', 'REINIGUNG');
+  add('HS01', 'Handschweißplatz', 'HANDSCHWEISSEN');
   // Arbeitsvorbereitung: Schreibtischarbeit, kein Werkstattplatz. Sie
   // bindet Personal und steht deshalb als eigener "Platz" ohne Begrenzung.
   add('AV01', 'Arbeitsvorbereitung', 'AV', true, 'Kein Werkstattplatz – bindet nur Personal.');
@@ -306,6 +371,11 @@ export function defaultPlaces() {
         + 'Helfer zuarbeiten (Werte zu validieren)',
     },
     REINIGEN: { places: 1, workersPerPlace: 1 },
+    /*
+     * Handschweißen (Nutzerauftrag 23.09.2026): "1 Handschweißplatz 1
+     * Mann" - fester, kleiner Platz, kein Aushilfe-Mechanismus.
+     */
+    HANDSCHWEISSEN: { places: 1, workersPerPlace: 1, note: 'ein Platz, ein Mann' },
   };
 }
 

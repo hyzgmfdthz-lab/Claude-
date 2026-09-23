@@ -102,16 +102,22 @@ test('Stunden je Arbeitsgang summieren sich auf die offene Arbeit der Aufträge'
 test('Orbitalschweißen: Stunden je Auftrag sind eine plausible Größe', () => {
   const ds = seedDataset();
   const a = analyze(ds, 'BASELINE');
-  const orb = a.processBalance.find((r) => r.opId === 'ORBITAL');
-  assert.ok(orb, 'Orbitalschweißen muss in der Buchung stehen');
-  assert.ok(orb.orders > 30, `nur ${orb.orders} Aufträge mit Orbitalschweißen`);
-  const jeAuftrag = orb.contentManHours / orb.orders;
+  /*
+   * Orbitalschweissen ist aufgeteilt in Kehlnaht und Stumpfnaht
+   * (Nutzerauftrag 23.09.2026) - der Erfahrungswert der Abteilung ("je
+   * Auftrag rund 90 h") gilt fuer BEIDE zusammen.
+   */
+  const kehl = a.processBalance.find((r) => r.opId === 'ORBITAL_KEHLNAHT');
+  const stumpf = a.processBalance.find((r) => r.opId === 'ORBITAL_STUMPFNAHT');
+  assert.ok(kehl && stumpf, 'Kehlnaht und Stumpfnaht Orbital müssen in der Buchung stehen');
+  assert.ok(kehl.orders > 30, `nur ${kehl.orders} Aufträge mit Kehlnaht Orbital`);
+  const jeAuftrag = (kehl.contentManHours + stumpf.contentManHours) / kehl.orders;
   // Erfahrungswert der Abteilungsleitung: "je Auftrag rund 90 h" (Daumenwert).
   // Die Arbeitsfolge liegt darunter - der Wert ist mit ihr abzugleichen,
   // deshalb hier nur eine weite Schranke gegen Rechenfehler.
   assert.ok(jeAuftrag > 20 && jeAuftrag < 200,
     `${jeAuftrag.toFixed(1)} h je Auftrag sind nicht plausibel`);
-  assert.ok(orb.plannedManHours <= orb.openManHours + 0.5,
+  assert.ok(kehl.plannedManHours <= kehl.openManHours + 0.5,
     'es darf nicht mehr eingeplant sein, als offen ist');
 });
 

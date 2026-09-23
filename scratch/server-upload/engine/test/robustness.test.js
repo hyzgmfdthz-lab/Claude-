@@ -90,7 +90,8 @@ test('Grenzfall: unsinnige Werte werden abgefangen', () => {
   const cap = dayCapacity(cfg, '2026-09-07');
   assert.ok(cap.poolHours >= 0);
   assert.ok(cap.byOp.HEFTEN.capUnits >= 0);
-  assert.ok(cap.byOp.ORBITAL.capUnits >= 0);
+  assert.ok(cap.byOp.ORBITAL_KEHLNAHT.capUnits >= 0);
+  assert.ok(cap.byOp.ORBITAL_STUMPFNAHT.capUnits >= 0);
 });
 
 test('Grenzfall: sehr grosse Stundenzahl bleibt beherrschbar', () => {

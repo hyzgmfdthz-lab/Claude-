@@ -256,12 +256,18 @@ test('Einsatzplan verteilt die Stunden auf die Mannschaft', () => {
 test('Einsatzplan gibt nur Arbeit, die die Person auch darf', () => {
   const dataset = seedDataset();
   const input = materialize(dataset, 'BASELINE');
-  for (const p of input.config.workforce.team.people) p.skills.ORBITAL = false;
-  input.config.workforce.team.people.find((p) => p.id === 'TOBE').skills.ORBITAL = true;
+  for (const p of input.config.workforce.team.people) {
+    p.skills.ORBITAL_KEHLNAHT = false;
+    p.skills.ORBITAL_STUMPFNAHT = false;
+  }
+  const tobe = input.config.workforce.team.people.find((p) => p.id === 'TOBE');
+  tobe.skills.ORBITAL_KEHLNAHT = true;
+  tobe.skills.ORBITAL_STUMPFNAHT = true;
   const result = runSchedule(input);
   const plan = assignPeople(result, input.config);
   const falsch = plan.days.flatMap((d) => d.entries)
-    .filter((e) => e.opId === 'ORBITAL' && e.personId && e.personId !== 'TOBE');
+    .filter((e) => (e.opId === 'ORBITAL_KEHLNAHT' || e.opId === 'ORBITAL_STUMPFNAHT')
+      && e.personId && e.personId !== 'TOBE');
   assert.equal(falsch.length, 0, 'nur TOBE darf orbital schweißen');
 });
 
@@ -525,6 +531,82 @@ test('Qualifikationsmatrix: ein Arbeitsgang ohne Qualifizierte ist kritisch', ()
   const b2 = analyze(ds, sz.id).plausibility.items
     .find((x) => x.code === 'ARBEITSGANG_OHNE_QUALIFIZIERTE');
   assert.match(b2.title, /2 Arbeitsgänge ohne/);
+});
+
+/* ------------------------------------------------------------------ *
+ * Skill-Level (Nutzerauftrag 23.09.2026)
+ * ------------------------------------------------------------------ */
+
+test('Skill-Level: die Person mit dem höheren Skill wird zuerst eingeteilt', () => {
+  /*
+   * Nutzerauftrag 23.09.2026: "Mitarbeiter nur an bestimmten Arbeitsplätzen
+   * geplant werden wenn der mit dem höheren skill nicht da ist wird er
+   * durch denjenigen mit dem nächst höheren ersetzt." Ein Platz, zwei
+   * gleichermaßen qualifizierte und anwesende Personen, mehr Arbeit als
+   * eine Person an diesem Platz schaffen kann - die mit dem höheren Skill
+   * gewinnt, nicht die mit weniger bisherigen Stunden.
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 2,
+      team: {
+        source: 'MANNSCHAFT', enforceSkills: true,
+        people: [
+          helferPerson('NIEDRIG', { SAEGEN: 1 }),
+          helferPerson('HOCH', { SAEGEN: 3 }),
+        ],
+      },
+    },
+  });
+  const date = '2026-09-21';
+  const result = {
+    config, projects: [], blocked: [],
+    daySeries: [{
+      date, kind: 'REGULAR', weekKey: '2026-W39', hoursPerEmployee: 7.5, productivity: 1,
+      byOp: { SAEGEN: {} },
+    }],
+    allocations: [{ date, projectId: 'P1', opId: 'SAEGEN', manHours: 7.5 }],
+  };
+
+  const plan = assignPeople(result, config, {});
+  const tag = plan.days.find((d) => d.date === date);
+  const hoch = tag.entries.find((e) => e.personId === 'HOCH');
+  const niedrig = tag.entries.find((e) => e.personId === 'NIEDRIG');
+  assert.ok(hoch, 'die Person mit dem höheren Skill muss die Stunden bekommen');
+  assert.equal(hoch.hours, 7.5);
+  assert.equal(niedrig, undefined, 'ohne freien Platz bekommt die Person mit niedrigerem Skill nichts');
+  const idle = tag.idle.find((i) => i.id === 'NIEDRIG');
+  assert.ok(idle, 'NIEDRIG steht stattdessen mit Grund da');
+});
+
+test('Skill-Level: fehlt die Person mit dem höheren Skill, springt die nächstbessere ein', () => {
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 2,
+      team: {
+        source: 'MANNSCHAFT', enforceSkills: true,
+        people: [
+          { ...helferPerson('NIEDRIG', { SAEGEN: 1 }) },
+          { ...helferPerson('HOCH', { SAEGEN: 3 }), absences: [{ from: '2026-09-21', to: '2026-09-21', kind: 'URLAUB' }] },
+        ],
+      },
+    },
+  });
+  const date = '2026-09-21';
+  const result = {
+    config, projects: [], blocked: [],
+    daySeries: [{
+      date, kind: 'REGULAR', weekKey: '2026-W39', hoursPerEmployee: 7.5, productivity: 1,
+      byOp: { SAEGEN: {} },
+    }],
+    allocations: [{ date, projectId: 'P1', opId: 'SAEGEN', manHours: 7.5 }],
+  };
+
+  const plan = assignPeople(result, config, {});
+  const tag = plan.days.find((d) => d.date === date);
+  const niedrig = tag.entries.find((e) => e.personId === 'NIEDRIG');
+  assert.ok(niedrig, 'ist die Person mit dem höheren Skill abwesend, übernimmt die nächstbeste');
+  assert.equal(niedrig.hours, 7.5);
 });
 
 /* ------------------------------------------------------------------ *

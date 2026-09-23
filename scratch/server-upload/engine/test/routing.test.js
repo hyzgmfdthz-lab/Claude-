@@ -22,18 +22,19 @@ test('Arbeitsplan: eigene Vorlage je MEGC-Variante, Stunden getrennt änderbar (
   // Variante differenziert werden kann.
   for (const v of ['FT20', 'FT30', 'FT40', 'FT45']) assert.equal(h(v), 255.25);
   const eigene = JSON.parse(JSON.stringify(T));
-  eigene.NEUBAU_FT20.steps.find((s) => s.opId === 'ORBITAL').hours = 60;
+  eigene.NEUBAU_FT20.steps.find((s) => s.opId === 'ORBITAL_KEHLNAHT').hours = 60;
   const h20 = resolveRouting(createProject({ projectType: 'NEUBAU', variant: 'FT20' }), eigene, C).totalManHours;
   const h40 = resolveRouting(createProject({ projectType: 'NEUBAU', variant: 'FT40' }), eigene, C).totalManHours;
-  assert.ok(h20 < h40, 'Eine Variante muss getrennt änderbar sein');
+  assert.notEqual(h20, h40, 'Eine Variante muss getrennt änderbar sein');
 });
 
 test('Arbeitsplan: bestätigte Stunden der bisherigen Planung', () => {
   const hours = (key) => Object.fromEntries(T[key].steps.map((s) => [s.opId, s.hours]));
   assert.deepEqual(hours('NEUBAU_FT40'), {
     AV: 7.5,
-    SAEGEN: 18, ENTGRATEN: 20.75, BIEGEN: 13, HEFTEN: 38.75, ORBITAL: 90.25,
-    BEIZEN: 17.75, VORMONTAGE: 12.25, HYDRO: 17, ENDKONTROLLE: 20,
+    SAEGEN: 18, ENTGRATEN: 20.75, BIEGEN: 13, HEFTEN: 38.75,
+    ORBITAL_KEHLNAHT: 30.08, ORBITAL_STUMPFNAHT: 60.17, HANDSCHWEISSEN: 0,
+    BEIZEN: 17.75, MOLCHEN: 0, VORMONTAGE: 12.25, HYDRO: 17, ENDKONTROLLE: 20,
   });
   // Die Arbeitsvorbereitung kommt mit 7,5 h je Auftrag hinzu
   assert.equal(T.UMBAU.steps.reduce((a, s) => a + s.hours, 0), 114);
@@ -48,7 +49,8 @@ test('Arbeitsplan: bestätigte Stunden der bisherigen Planung', () => {
    * wird nichts.
    */
   assert.deepEqual(T.ZUBEHOER.steps.map((s) => s.opId),
-    ['AV', 'SAEGEN', 'BIEGEN', 'ORBITAL', 'BEIZEN', 'VORMONTAGE', 'HYDRO', 'ENDKONTROLLE']);
+    ['AV', 'SAEGEN', 'BIEGEN', 'ORBITAL_KEHLNAHT', 'ORBITAL_STUMPFNAHT', 'HANDSCHWEISSEN',
+      'BEIZEN', 'MOLCHEN', 'VORMONTAGE', 'HYDRO', 'ENDKONTROLLE']);
   assert.equal(T.ZUBEHOER.steps.reduce((a, s) => a + s.hours, 0), 0);
   assert.equal(T.ZUBEHOER.validated, false);
 });
@@ -87,13 +89,13 @@ test('Fortschritt Variante B: Reststunden je Arbeitsgang sind führend (§41)', 
       { opId: 'SAEGEN', status: 'FERTIG' },
       { opId: 'BIEGEN', status: 'FERTIG' },
       { opId: 'HEFTEN', remainingHours: 12 },
-      { opId: 'ORBITAL', remainingHours: 65 },
+      { opId: 'ORBITAL_KEHLNAHT', remainingHours: 65 },
     ],
   });
   const r = resolveRouting(p, T, C);
   assert.equal(r.ops.find((o) => o.opId === 'SAEGEN').remainingUnits, 0);
   assert.equal(r.ops.find((o) => o.opId === 'HEFTEN').remainingUnits, 12);
-  assert.equal(r.ops.find((o) => o.opId === 'ORBITAL').remainingUnits, 65);
+  assert.equal(r.ops.find((o) => o.opId === 'ORBITAL_KEHLNAHT').remainingUnits, 65);
   // Der Prozentwert wird ignoriert, wenn Reststunden gepflegt sind
   assert.ok(r.remainingManHours > 100);
 });
@@ -133,17 +135,19 @@ test('Reststunden größer als Sollstunden erhöhen den Gesamtaufwand', () => {
 test('Arbeitsfolge ist ein Abhängigkeitsnetz (topologische Sortierung, §11)', () => {
   const r = resolveRouting(createProject({ projectType: 'WKP' }), T, C);
   const order = topoSort(r.ops).map((o) => o.opId);
-  assert.deepEqual(order, ['AV', 'SAEGEN', 'ENTGRATEN', 'BIEGEN', 'HEFTEN', 'ORBITAL', 'BEIZEN', 'VORMONTAGE', 'HYDRO', 'ENDKONTROLLE', 'REINIGEN']);
+  assert.deepEqual(order, ['AV', 'SAEGEN', 'ENTGRATEN', 'BIEGEN', 'HEFTEN',
+    'ORBITAL_KEHLNAHT', 'ORBITAL_STUMPFNAHT', 'HANDSCHWEISSEN',
+    'BEIZEN', 'MOLCHEN', 'VORMONTAGE', 'HYDRO', 'ENDKONTROLLE', 'REINIGEN']);
   assert.deepEqual(terminalOps(r.ops).map((o) => o.opId), ['REINIGEN']);
 });
 
 test('Orbitalschweißen wird in Mannstunden geführt (§54)', () => {
   const r = resolveRouting(createProject({ projectType: 'NEUBAU', variant: 'FT40' }), T, C);
-  const orb = r.ops.find((o) => o.opId === 'ORBITAL');
-  // 90,25 h sind summierte Personenstunden; die Maschinenbelegung ergibt sich
-  // daraus ueber "Maschinen je Schweisser".
+  const orb = r.ops.find((o) => o.opId === 'ORBITAL_KEHLNAHT');
+  // 30,08 h (ein Drittel von 90,25 h) sind summierte Personenstunden; die
+  // Maschinenbelegung ergibt sich daraus ueber "Maschinen je Schweisser".
   assert.equal(orb.manHourFactor, 1);
-  assert.equal(orb.totalUnits, 90.25);
+  assert.equal(orb.totalUnits, 30.08);
   const heft = r.ops.find((o) => o.opId === 'HEFTEN');
   assert.equal(heft.manHourFactor, 1);
 });

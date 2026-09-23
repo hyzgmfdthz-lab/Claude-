@@ -240,6 +240,14 @@ Leiharbeiter ist, wird zu günstig und zu produktiv gerechnet.
 gewünschten Woche. Wer einen Eintritt hinterlegt hat, ist ab dann dauerhaft
 dabei. Ohne Einsatzende rechnet die Anwendung bis zum Ende des Horizonts mit.
 
+**Skill-Level statt Haken:** Mannschaft → "Wer darf was?", je Person und
+Arbeitsgang eine Stufe 0-3 (0 = nicht qualifiziert, 1 = Grundkenntnisse,
+2 = Fortgeschritten, 3 = Experte). Braucht ein Arbeitsgang mehr Leute, als
+verfügbar sind, wird zuerst der höchste verfügbare Skill eingeteilt - fehlt
+diese Person, rückt automatisch die nächstbeste nach. Die Stufe wirkt nur
+auf die Reihenfolge, nicht auf die Arbeitszeit: alle Stufen brauchen
+gleich lange für dieselbe Arbeit.
+
 **Schicht von Hand festlegen:** Mannschaft → Schichtplanung je KW. Ohne
 Eintrag rotiert jede schichtfähige Person automatisch wochenweise durch die
 Schichten (nie tageweise). Wird hier für eine Person und Woche eine Schicht

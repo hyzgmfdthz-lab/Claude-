@@ -112,9 +112,9 @@ test('Dauerlauf: eine Woche Betrieb mit vier Personen', () => {
 
   const vorlage = api.state().templates.NEUBAU_FT40;
   const geaendert = api.updateTemplate('NEUBAU_FT40', {
-    steps: vorlage.steps.map((s) => (s.opId === 'ORBITAL' ? { ...s, hours: s.hours + 5 } : s)),
+    steps: vorlage.steps.map((s) => (s.opId === 'ORBITAL_KEHLNAHT' ? { ...s, hours: s.hours + 5 } : s)),
   });
-  assert.equal(geaendert.steps.find((s) => s.opId === 'ORBITAL').hours, vorlage.steps.find((s) => s.opId === 'ORBITAL').hours + 5);
+  assert.equal(geaendert.steps.find((s) => s.opId === 'ORBITAL_KEHLNAHT').hours, vorlage.steps.find((s) => s.opId === 'ORBITAL_KEHLNAHT').hours + 5);
 
   const plaetze = api.state().workplaces.map((w) => (w.id === 'HE03' ? { ...w, active: true } : w));
   api.updateWorkplaces(plaetze);

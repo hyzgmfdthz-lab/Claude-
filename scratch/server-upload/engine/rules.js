@@ -66,8 +66,21 @@ export const OPERATION_WORDS = {
   ENTGRATEN: ['entgraten', 'entgratung', 'entgrater'],
   BIEGEN: ['biegen', 'biegerei', 'rohrbiegen', 'gebogen'],
   HEFTEN: ['heften', 'heftplatz', 'heftplätze', 'tacken', 'geheftet', 'heftung'],
-  ORBITAL: ['orbitalschweißen', 'orbitalschweissen', 'orbital', 'schweißen', 'schweissen', 'wig', 'orbitalmaschine'],
+  /*
+   * Orbitalschweissen aufgeteilt in Kehlnaht und Stumpfnaht (Nutzerauftrag
+   * 23.09.2026). Die eigenen Begriffe ("kehlnaht", "stumpfnaht") treffen nur
+   * den jeweiligen Arbeitsgang; die allgemeinen Begriffe ("orbital",
+   * "schweißen", "wig", ...) stehen bewusst bei BEIDEN - eine Regel ohne
+   * Nahtart soll beide treffen, sie teilen sich ohnehin denselben Topf.
+   */
+  ORBITAL_KEHLNAHT: ['kehlnaht orbital', 'kehlnahtschweißen', 'kehlnahtschweissen', 'kehlnaht',
+    'orbitalschweißen', 'orbitalschweissen', 'orbital', 'schweißen', 'schweissen', 'wig', 'orbitalmaschine'],
+  ORBITAL_STUMPFNAHT: ['stumpfnaht orbital', 'stumpfnahtschweißen', 'stumpfnahtschweissen', 'stumpfnaht',
+    'orbitalschweißen', 'orbitalschweissen', 'orbital', 'schweißen', 'schweissen', 'wig', 'orbitalmaschine'],
+  HANDSCHWEISSEN: ['handschweißen', 'handschweissen', 'von hand schweißen', 'von hand schweissen',
+    'von hand geschweißt', 'von hand geschweisst', 'handschweißplatz'],
   BEIZEN: ['beizen', 'beize', 'passivieren', 'gebeizt'],
+  MOLCHEN: ['molchen', 'molch', 'molcher', 'gemolcht', 'leitung reinigen'],
   VORMONTAGE: ['doppelklemmring', 'doppelklemmringmontage', 'dkr', 'verschraubung', 'verschraubungen',
     'klemmring', 'klemmringe', 'vormontage', 'montage der verschraubungen'],
   HYDRO: ['hydro', 'hydroprüfung', 'hydropruefung', 'abdrücken', 'abdruecken', 'druckprüfung', 'druckpruefung', 'druckprobe'],

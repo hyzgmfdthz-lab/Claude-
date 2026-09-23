@@ -44,7 +44,9 @@ function mannschaft(a) {
   const wer = h('div');
   ladeWerZaehlt(a, wer);
   box.append(wer, grundlagen(a), card('Wer darf was?', inhalt, {
-    sub: 'Ein Haken heißt: Diese Person kann den Arbeitsgang übernehmen. Ohne Haken zählt sie dort nicht mit.',
+    sub: 'Skill-Level je Arbeitsgang: 0 = nicht qualifiziert (zählt dort nicht mit), 1-3 steigend. '
+      + 'Bestimmt nur die Rangfolge im Einsatzplan (wer zuerst eingeteilt wird, wenn mehrere qualifiziert '
+      + 'sind) - die Bearbeitungszeit ist bei jeder Stufe gleich.',
     flush: true,
     actions: [h('button.btn.btn--sm', { onclick: () => personDialog(a, null) }, '+ Kürzel')],
   }));
@@ -470,13 +472,25 @@ async function ladeMannschaft(a, container) {
           onchange: (e) => speichern(a, t, p.id, (x) => { x.shiftCapable = e.target.checked; }),
         }),
       },
+      /*
+       * Skill-Level statt Ja/Nein (Nutzerauftrag 23.09.2026): 0 = nicht
+       * qualifiziert, 1-3 steigend. Wirkt nur auf die Rangfolge im
+       * Einsatzplan (wer zuerst eingeteilt wird), nicht auf die
+       * Bearbeitungszeit.
+       */
       ...t.operations.map((op) => ({
         key: op.id,
         label: op.name.split(' ')[0].slice(0, 9),
-        render: (p) => h('input', {
-          type: 'checkbox', checked: !!p.skills?.[op.id], title: `${p.id}: ${op.name}`,
-          onchange: (e) => speichern(a, t, p.id, (x) => { x.skills = { ...x.skills, [op.id]: e.target.checked }; }),
-        }),
+        render: (p) => {
+          const stufe = Number(p.skills?.[op.id] ?? 0);
+          return h('select', {
+            title: `${p.id}: ${op.name} – ${t.skillLevels?.[stufe] ?? stufe}`,
+            onchange: (e) => speichern(a, t, p.id,
+              (x) => { x.skills = { ...x.skills, [op.id]: Number(e.target.value) }; }),
+          }, Object.entries(t.skillLevels ?? {}).map(([wert, name]) => h('option', {
+            value: wert, selected: Number(wert) === stufe,
+          }, wert)));
+        },
       })),
       {
         key: 'einsatz',

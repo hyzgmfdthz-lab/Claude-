@@ -193,9 +193,9 @@ test('Beim Orbitalschweißen begrenzen die Schweißer, nicht die Maschinen', () 
   const maschinen = Number(input.config.resources.orbitalMachinesActive
     ?? input.config.resources.orbitalMachines);
   const jeSchweisser = Number(input.config.resources.machinesPerWelder ?? 2);
-  assert.equal(koepfeJeSchicht(input.config, 'ORBITAL'),
+  assert.equal(koepfeJeSchicht(input.config, 'ORBITAL_KEHLNAHT'),
     Math.floor(maschinen / jeSchweisser));
-  assert.ok(koepfeJeSchicht(input.config, 'ORBITAL') < maschinen,
+  assert.ok(koepfeJeSchicht(input.config, 'ORBITAL_KEHLNAHT') < maschinen,
     '"+13 Plätze" war genau dieser Fehler');
 });
 

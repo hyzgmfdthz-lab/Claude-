@@ -12,7 +12,9 @@
  * ineinandergreifen koennen.
  */
 
-import { OPERATION_BY_ID, PROJECT_STATUS, DEP_TYPE, round2 } from './model.js';
+import {
+  OPERATION_BY_ID, PROJECT_STATUS, DEP_TYPE, round2, capacityGroupSiblings,
+} from './model.js';
 import { dayCapacity, DAY_KIND, LIMITER } from './capacity.js';
 import { resolveRouting, topoSort } from './routing.js';
 import { addDays, addWeeks, cmpDate, dateRange, weekKey, diffDays } from './calendar.js';
@@ -579,6 +581,18 @@ function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
 
       ctx.poolRest = clampHours(ctx.poolRest - man);
       ctx.opRest[op.opId] = clampHours(capOpUnits - granted);
+      /*
+       * Geteilter Kapazitaetstopf (Nutzerauftrag 23.09.2026): Kehlnaht und
+       * Stumpfnaht Orbital nutzen dieselben Maschinen und denselben
+       * Schweißer-Pool. Was der eine Arbeitsgang heute verbraucht, fehlt
+       * dem anderen - deshalb wird hier bei jedem Geschwister-Arbeitsgang
+       * derselbe Betrag mit abgezogen, statt beiden unabhaengig den vollen
+       * Topf zu geben (das wuerde die Maschinenkapazitaet verdoppeln).
+       */
+      for (const sib of capacityGroupSiblings(op.opId)) {
+        if (ctx.opRest[sib] == null) continue;
+        ctx.opRest[sib] = clampHours(ctx.opRest[sib] - granted);
+      }
       /*
        * Vom Auftrag geht nur der ARBEITSINHALT ab. Der Mehraufwand der
        * Aushilfe kostet Arbeitszeit (Pool), macht den Auftrag aber nicht

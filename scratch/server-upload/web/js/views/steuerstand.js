@@ -935,12 +935,18 @@ function chartCard(a, weeks) {
       }),
       capacityLegend(),
       h('div.small.muted', { style: { marginTop: '6px' } },
-        `${zeile.places ?? '–'} ${zeile.opId === 'ORBITAL' ? 'Maschinen' : 'Plätze'}`,
+        `${zeile.places ?? '–'} ${zeile.unit === 'Maschinenstunden' ? 'Maschinen' : 'Plätze'}`,
         ` · ${fmt.num(zeile.daysPerWeek, 1)} mögliche Tage je Woche`,
         stauTage > 0
           ? h('span', ` · Stau an ${stauTage} Tagen, am stärksten ${fmt.num(stauMax, 1)} h`
             + `${zeile.blockedCause ? ` (${zeile.blockedCause})` : ''}`)
-          : ' · es blieb nichts liegen')),
+          : ' · es blieb nichts liegen',
+        zeile.sharedCapacityWith
+          ? h('div.small.faint', { style: { marginTop: '4px' } },
+            'Teilt sich Maschinen und Schweißer mit '
+            + `${zeile.sharedCapacityWith === 'ORBITAL_STUMPFNAHT' ? 'Stumpfnaht' : 'Kehlnaht'} Orbital – `
+            + 'die gezeigte Kapazität gilt für beide zusammen.')
+          : null)),
     {
       flush: true,
       sub: 'Säulen = Bedarf einschließlich der Arbeit, die liegenblieb. Linie = mögliche Belegungszeit '
@@ -1241,7 +1247,8 @@ export function shiftCard(a, an, cfg) {
   // Diese Arbeitsgaenge sind auch ohne eigenen Eintrag begrenzt (eigene Parameter).
   const immerBegrenzt = {
     HEFTEN: cfg.resources.heftPlaces,
-    ORBITAL: cfg.resources.orbitalMachinesActive ?? cfg.resources.orbitalMachines,
+    ORBITAL_KEHLNAHT: cfg.resources.orbitalMachinesActive ?? cfg.resources.orbitalMachines,
+    ORBITAL_STUMPFNAHT: cfg.resources.orbitalMachinesActive ?? cfg.resources.orbitalMachines,
     HYDRO: cfg.resources.hydroStations,
     BEIZEN: cfg.resources.beizStations,
   };

@@ -4210,12 +4210,18 @@ function chartCard(a, weeks) {
       }),
       capacityLegend(),
       h('div.small.muted', { style: { marginTop: '6px' } },
-        `${zeile.places ?? '–'} ${zeile.opId === 'ORBITAL' ? 'Maschinen' : 'Plätze'}`,
+        `${zeile.places ?? '–'} ${zeile.unit === 'Maschinenstunden' ? 'Maschinen' : 'Plätze'}`,
         ` · ${fmt.num(zeile.daysPerWeek, 1)} mögliche Tage je Woche`,
         stauTage > 0
           ? h('span', ` · Stau an ${stauTage} Tagen, am stärksten ${fmt.num(stauMax, 1)} h`
             + `${zeile.blockedCause ? ` (${zeile.blockedCause})` : ''}`)
-          : ' · es blieb nichts liegen')),
+          : ' · es blieb nichts liegen',
+        zeile.sharedCapacityWith
+          ? h('div.small.faint', { style: { marginTop: '4px' } },
+            'Teilt sich Maschinen und Schweißer mit '
+            + `${zeile.sharedCapacityWith === 'ORBITAL_STUMPFNAHT' ? 'Stumpfnaht' : 'Kehlnaht'} Orbital – `
+            + 'die gezeigte Kapazität gilt für beide zusammen.')
+          : null)),
     {
       flush: true,
       sub: 'Säulen = Bedarf einschließlich der Arbeit, die liegenblieb. Linie = mögliche Belegungszeit '
@@ -4516,7 +4522,8 @@ function shiftCard(a, an, cfg) {
   // Diese Arbeitsgaenge sind auch ohne eigenen Eintrag begrenzt (eigene Parameter).
   const immerBegrenzt = {
     HEFTEN: cfg.resources.heftPlaces,
-    ORBITAL: cfg.resources.orbitalMachinesActive ?? cfg.resources.orbitalMachines,
+    ORBITAL_KEHLNAHT: cfg.resources.orbitalMachinesActive ?? cfg.resources.orbitalMachines,
+    ORBITAL_STUMPFNAHT: cfg.resources.orbitalMachinesActive ?? cfg.resources.orbitalMachines,
     HYDRO: cfg.resources.hydroStations,
     BEIZEN: cfg.resources.beizStations,
   };
@@ -6736,7 +6743,9 @@ function mannschaft(a) {
   const wer = h('div');
   ladeWerZaehlt(a, wer);
   box.append(wer, grundlagen(a), card('Wer darf was?', inhalt, {
-    sub: 'Ein Haken heißt: Diese Person kann den Arbeitsgang übernehmen. Ohne Haken zählt sie dort nicht mit.',
+    sub: 'Skill-Level je Arbeitsgang: 0 = nicht qualifiziert (zählt dort nicht mit), 1-3 steigend. '
+      + 'Bestimmt nur die Rangfolge im Einsatzplan (wer zuerst eingeteilt wird, wenn mehrere qualifiziert '
+      + 'sind) - die Bearbeitungszeit ist bei jeder Stufe gleich.',
     flush: true,
     actions: [h('button.btn.btn--sm', { onclick: () => personDialog(a, null) }, '+ Kürzel')],
   }));
@@ -7162,13 +7171,25 @@ async function ladeMannschaft(a, container) {
           onchange: (e) => speichern(a, t, p.id, (x) => { x.shiftCapable = e.target.checked; }),
         }),
       },
+      /*
+       * Skill-Level statt Ja/Nein (Nutzerauftrag 23.09.2026): 0 = nicht
+       * qualifiziert, 1-3 steigend. Wirkt nur auf die Rangfolge im
+       * Einsatzplan (wer zuerst eingeteilt wird), nicht auf die
+       * Bearbeitungszeit.
+       */
       ...t.operations.map((op) => ({
         key: op.id,
         label: op.name.split(' ')[0].slice(0, 9),
-        render: (p) => h('input', {
-          type: 'checkbox', checked: !!p.skills?.[op.id], title: `${p.id}: ${op.name}`,
-          onchange: (e) => speichern(a, t, p.id, (x) => { x.skills = { ...x.skills, [op.id]: e.target.checked }; }),
-        }),
+        render: (p) => {
+          const stufe = Number(p.skills?.[op.id] ?? 0);
+          return h('select', {
+            title: `${p.id}: ${op.name} – ${t.skillLevels?.[stufe] ?? stufe}`,
+            onchange: (e) => speichern(a, t, p.id,
+              (x) => { x.skills = { ...x.skills, [op.id]: Number(e.target.value) }; }),
+          }, Object.entries(t.skillLevels ?? {}).map(([wert, name]) => h('option', {
+            value: wert, selected: Number(wert) === stufe,
+          }, wert)));
+        },
       })),
       {
         key: 'einsatz',
@@ -9212,8 +9233,9 @@ function render(a) {
               h('button.btn.btn--sm', { style: { marginLeft: '6px' }, onclick: () => a.navigate('team') },
                 'Mannschaft öffnen')),
             h('div.small.muted', { style: { marginTop: '8px' } },
-              `Derzeit sind ${an.team?.byOperation?.find((x) => x.opId === 'ORBITAL')?.qualified ?? '–'} `
-              + 'Personen für das Orbitalschweißen angehakt. Die Maschinen begrenzen zusätzlich: '
+              `Derzeit sind ${an.team?.byOperation?.find((x) => x.opId === 'ORBITAL_KEHLNAHT')?.qualified ?? '–'} `
+              + `für Kehlnaht und ${an.team?.byOperation?.find((x) => x.opId === 'ORBITAL_STUMPFNAHT')?.qualified ?? '–'} `
+              + 'für Stumpfnaht Orbital angehakt (beide teilen sich dieselben Maschinen). Die Maschinen begrenzen zusätzlich: '
               + `${cfg.resources.orbitalMachinesActive} Maschinen ÷ ${cfg.resources.machinesPerWelder} `
               + `je Schweißer = höchstens ${Math.floor(Number(cfg.resources.orbitalMachinesActive)
                 / Math.max(1, Number(cfg.resources.machinesPerWelder)))} gleichzeitig.`))
@@ -10260,7 +10282,7 @@ __defs["server/api.js"] = function (__exports, __req) {
  * Enthaelt keine HTTP-Details - dadurch automatisiert testbar.
  */
 
-const { analyze, materialize, duplicateScenario, resetScenario, getScenario, optimize, proposeSolutions, evaluate, summarize, kpiDelta, projectStatusDiff, whatHelps, requiredAdditionalStaff, createProject, makeId, deepClone, deepMerge, validate, validationSummary, seedDataset, defaultRoutingTemplates, defaultWorkplaces, defaultConfig, OPERATIONS, PROJECT_TYPES, VARIANTS, PRIORITIES, OPERATION_BY_ID, routingLabel, formatDE, parseDate, runSchedule, round2, defaultUsers, publicUser, normalizeUserId, hashPassword, verifyPassword, passwordProblem, createSession, tokenHashOf, SESSION_HOURS, ADMIN_USER, parseRuleText, checkRules, ruleSummary, hasError, emptyRule, RULE_TYPES, assignPeople, personWeek, defaultTeam, peopleOf, teamOn, ZUGESAGTE_LEIHE, planeSchichten, mitSchichten, SHIFTS, ABSENCE_KINDS, weekList, parseAttendanceMatrix, absentPerDay, absentPerWeek, board, BOARD_MODE, wendeBestaetigungenAn, PLAUSI_LEVEL, wendeMassnahmeAn, mehraufwand: rechneMehraufwand, runSchedule: planeDurch, AV_ERLEDIGT_BIS, OP_STATUS } = __req("engine/index.js");
+const { analyze, materialize, duplicateScenario, resetScenario, getScenario, optimize, proposeSolutions, evaluate, summarize, kpiDelta, projectStatusDiff, whatHelps, requiredAdditionalStaff, createProject, makeId, deepClone, deepMerge, validate, validationSummary, seedDataset, defaultRoutingTemplates, defaultWorkplaces, defaultConfig, OPERATIONS, PROJECT_TYPES, VARIANTS, PRIORITIES, OPERATION_BY_ID, routingLabel, formatDE, parseDate, runSchedule, round2, defaultUsers, publicUser, normalizeUserId, hashPassword, verifyPassword, passwordProblem, createSession, tokenHashOf, SESSION_HOURS, ADMIN_USER, parseRuleText, checkRules, ruleSummary, hasError, emptyRule, RULE_TYPES, assignPeople, personWeek, defaultTeam, peopleOf, teamOn, ZUGESAGTE_LEIHE, planeSchichten, mitSchichten, SHIFTS, ABSENCE_KINDS, SKILL_LEVELS, weekList, parseAttendanceMatrix, absentPerDay, absentPerWeek, board, BOARD_MODE, wendeBestaetigungenAn, PLAUSI_LEVEL, wendeMassnahmeAn, mehraufwand: rechneMehraufwand, runSchedule: planeDurch, AV_ERLEDIGT_BIS, OP_STATUS } = __req("engine/index.js");
 const { writeXlsx, readXlsx, writeCsv, readCsv } = __req("browser/xlsx.js");
 
 class ApiError extends Error {
@@ -10950,6 +10972,7 @@ function createApi(store, options = {}) {
         people: deepClone(team.people ?? []),
         operations: OPERATIONS.map((o) => ({ id: o.id, name: o.name })),
         shifts: SHIFTS,
+        skillLevels: SKILL_LEVELS,
         absenceKinds: ABSENCE_KINDS,
         sickRate: cfg.workforce?.sickRate ?? 0,
         /**
@@ -12714,6 +12737,23 @@ function migrate(dataset) {
     s.config = deepMerge(defaultConfig(), s.config ?? {});
     s.projectOverrides ??= {};
     s.measures ??= [];
+    /*
+     * Skill-Level statt Ja/Nein (Nutzerauftrag 23.09.2026). `people` ist
+     * ein Array - deepMerge ersetzt es komplett statt es zu mischen -,
+     * deshalb bekommen bestehende Personen die neuen Arbeitsgaenge
+     * (Kehlnaht/Stumpfnaht Orbital, Handschweißen, Molchen) sonst gar
+     * keinen Eintrag in ihrer Qualifikationsmatrix. Alte Ja/Nein-Werte
+     * werden dabei gleich mit uebersetzt: true -> 2 (Fortgeschritten,
+     * entspricht dem bisherigen "kann"), false -> 0 (nicht qualifiziert).
+     */
+    for (const p of s.config.workforce?.team?.people ?? []) {
+      p.skills ??= {};
+      for (const op of OPERATIONS) {
+        const v = p.skills[op.id];
+        if (typeof v === 'boolean') p.skills[op.id] = v ? 2 : 0;
+        else if (v == null) p.skills[op.id] = 2;
+      }
+    }
   }
   // Gearbeitet wird auf einem eigenen Stand, damit Aenderungen sofort wirken
   // koennen, ohne die Baseline als Referenz zu verlieren.
@@ -13721,7 +13761,8 @@ const STATUS_COLOR = {
 
 const OP_COLOR = {
   SAEGEN: '#4d7ea8', ENTGRATEN: '#5b8fa8', BIEGEN: '#3f8f8c', HEFTEN: '#00727a',
-  ORBITAL: '#0f6ecd', BEIZEN: '#6b4fa8', VORMONTAGE: '#8a6bbf', HYDRO: '#c8860d',
+  ORBITAL_KEHLNAHT: '#0f6ecd', ORBITAL_STUMPFNAHT: '#0a4f92', HANDSCHWEISSEN: '#1f9c8f',
+  BEIZEN: '#6b4fa8', MOLCHEN: '#b8842e', VORMONTAGE: '#8a6bbf', HYDRO: '#c8860d',
   ENDKONTROLLE: '#2e8b57', REINIGEN: '#7a8794',
 };
 
@@ -14375,6 +14416,8 @@ __defs["engine/model.js"] = function (__exports, __req) {
  * @property {boolean} [requiresNoBo]
  * @property {number[]} [allowedWeekdays]
  * @property {boolean} [machinesPerWorker] Maschinenbelegung ergibt sich aus den Mannstunden
+ * @property {string} [capacityGroup] Arbeitsgaenge mit demselben Wert teilen sich EINEN
+ *   Kapazitaetstopf (z.B. dieselben Maschinen) - siehe scheduler.js, capacityGroupSiblings().
  */
 
 /** @type {OperationDef[]} */
@@ -14394,8 +14437,31 @@ const OPERATIONS = [
   { id: 'ENTGRATEN',   name: 'Entgraten',                    short: 'Ent',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'ENTGRAT' },
   { id: 'BIEGEN',      name: 'Biegen',                       short: 'Bie',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'BIEGE' },
   { id: 'HEFTEN',      name: 'Heften',                       short: 'Hef',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'HEFTPLATZ' },
-  { id: 'ORBITAL',     name: 'Orbitalschweißen',             short: 'Orb',  kind: 'MACHINE',    unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'ORBITAL', machinesPerWorker: true },
+  /*
+   * Orbitalschweissen aufgeteilt in Kehlnaht und Stumpfnaht (Nutzerauftrag
+   * 23.09.2026: "im Arbeitsplan muss Orbitalschweißen aufgeteilt werden in
+   * Kehlnaht Orbital und Stumpfnaht Orbital"). Beide nutzen dieselben
+   * Orbitalmaschinen und denselben Schweißer-Pool (capacityGroup 'ORBITAL',
+   * kein Reihenfolgezwang zueinander - "überlappend möglich").
+   */
+  { id: 'ORBITAL_KEHLNAHT',   name: 'Kehlnaht Orbital',       short: 'OrbK', kind: 'MACHINE',    unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'ORBITAL', machinesPerWorker: true, capacityGroup: 'ORBITAL' },
+  { id: 'ORBITAL_STUMPFNAHT', name: 'Stumpfnaht Orbital',     short: 'OrbS', kind: 'MACHINE',    unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'ORBITAL', machinesPerWorker: true, capacityGroup: 'ORBITAL' },
+  /*
+   * Handschweißen (Nutzerauftrag 23.09.2026): eigener Arbeitsgang, eigene,
+   * von Orbital unabhängige Qualifikation, 1 Platz für 1 Mann. Standardmäßig
+   * 0 h je Arbeitsplan - wird je Auftrag bei Bedarf von Hand eingestellt.
+   */
+  { id: 'HANDSCHWEISSEN', name: 'Handschweißen',              short: 'HaSw', kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'HANDSCHWEISSEN' },
   { id: 'BEIZEN',      name: 'Beizen',                       short: 'Bei',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'BEIZE' },
+  /*
+   * Molchen (Nutzerauftrag 23.09.2026: "bei Sonderprojekte muss noch der
+   * Arbeitsgang Molchen mit aufgenommen werden ... und bei Wiederkehrern
+   * muss das auch mit rein"). Wie Handschweißen standardmäßig 0 h - wird
+   * je Auftrag bei Bedarf von Hand eingestellt. Keine Platzgrenze
+   * hinterlegt (keine Angabe dazu) - begrenzt nur durch qualifizierte
+   * Personen, bis dazu etwas vorliegt.
+   */
+  { id: 'MOLCHEN',     name: 'Molchen',                      short: 'Mol',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'MOLCHEN' },
   { id: 'VORMONTAGE',  name: 'Doppelklemmring-Vormontage',   short: 'Vor',  kind: 'MANUAL',     unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'MONTAGE' },
   { id: 'HYDRO',       name: 'Hydroprüfung / Abdrücken',     short: 'Hyd',  kind: 'INSPECTION', unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'HYDRO', requiresNoBo: true, allowedWeekdays: [2, 3, 4] },
   { id: 'ENDKONTROLLE',name: 'Endkontrolle',                 short: 'End',  kind: 'INSPECTION', unit: 'Mannstunden',     manHourFactor: 1,   workplaceType: 'QS' },
@@ -14404,6 +14470,17 @@ const OPERATIONS = [
 
 /** @type {Record<string, OperationDef>} */
 const OPERATION_BY_ID = Object.fromEntries(OPERATIONS.map((o) => [o.id, o]));
+
+/**
+ * Andere Arbeitsgaenge, die sich denselben Kapazitaetstopf teilen (siehe
+ * OperationDef.capacityGroup) - ohne den Arbeitsgang selbst.
+ * @param {string} opId @returns {string[]}
+ */
+function capacityGroupSiblings(opId) {
+  const group = OPERATION_BY_ID[opId]?.capacityGroup;
+  if (!group) return [];
+  return OPERATIONS.filter((o) => o.id !== opId && o.capacityGroup === group).map((o) => o.id);
+}
 
 /** @param {string} id @returns {OperationDef|undefined} */
 function operation(id) {
@@ -14635,6 +14712,7 @@ function round1(n) {
   return Math.round((n + Number.EPSILON) * 10) / 10;
 }
 
+  __exports["capacityGroupSiblings"] = capacityGroupSiblings;
   __exports["operation"] = operation;
   __exports["operationName"] = operationName;
   __exports["routingKey"] = routingKey;
@@ -14863,13 +14941,39 @@ const { defaultTeam } = __req("engine/team.js");
  */
 const AV_STUNDEN = 7.5;
 
+/**
+ * Teilt eine bisherige Orbitalschweiss-Zeit im Verhaeltnis 1:2 auf Kehlnaht
+ * und Stumpfnaht auf (Nutzerauftrag 23.09.2026, Beispiel "90 Stunden, davon
+ * 30h Kehlnaht und 60h Stumpfnaht" - festes Verhaeltnis, auf Wunsch des
+ * Nutzers auf alle Arbeitsplaene angewandt statt echte Einzelwerte
+ * abzuwarten). Stumpfnaht wird als Rest gerechnet, damit die Summe exakt
+ * der bisherigen Orbitalzeit entspricht (keine Rundungsdrift).
+ * @param {number} total
+ */
+function splitOrbital(total) {
+  const kehlnaht = Math.round((total / 3) * 100) / 100;
+  return { ORBITAL_KEHLNAHT: kehlnaht, ORBITAL_STUMPFNAHT: Math.round((total - kehlnaht) * 100) / 100 };
+}
+
 const HOURS = {
   /** Neubau: Summe 247,75 h + 7,5 h Arbeitsvorbereitung */
-  NEUBAU: { AV: AV_STUNDEN, SAEGEN: 18, ENTGRATEN: 20.75, BIEGEN: 13, HEFTEN: 38.75, ORBITAL: 90.25, BEIZEN: 17.75, VORMONTAGE: 12.25, HYDRO: 17, ENDKONTROLLE: 20 },
+  NEUBAU: {
+    AV: AV_STUNDEN, SAEGEN: 18, ENTGRATEN: 20.75, BIEGEN: 13, HEFTEN: 38.75,
+    ...splitOrbital(90.25), HANDSCHWEISSEN: 0,
+    BEIZEN: 17.75, MOLCHEN: 0, VORMONTAGE: 12.25, HYDRO: 17, ENDKONTROLLE: 20,
+  },
   /** Umbau und Pruefer: Summe 106,5 h + 7,5 h Arbeitsvorbereitung */
-  UMBAU: { AV: AV_STUNDEN, SAEGEN: 6, ENTGRATEN: 6.5, BIEGEN: 7.5, HEFTEN: 19.5, ORBITAL: 45, BEIZEN: 6, VORMONTAGE: 4, HYDRO: 5.5, ENDKONTROLLE: 6.5 },
+  UMBAU: {
+    AV: AV_STUNDEN, SAEGEN: 6, ENTGRATEN: 6.5, BIEGEN: 7.5, HEFTEN: 19.5,
+    ...splitOrbital(45), HANDSCHWEISSEN: 0,
+    BEIZEN: 6, MOLCHEN: 0, VORMONTAGE: 4, HYDRO: 5.5, ENDKONTROLLE: 6.5,
+  },
   /** Wiederkehrer ISO: Summe 257 h (einschliesslich Reinigen) + 7,5 h AV */
-  WKP: { AV: AV_STUNDEN, SAEGEN: 18, ENTGRATEN: 21, BIEGEN: 13, HEFTEN: 39, ORBITAL: 91, BEIZEN: 18, VORMONTAGE: 12.5, HYDRO: 17, ENDKONTROLLE: 20, REINIGEN: 7.5 },
+  WKP: {
+    AV: AV_STUNDEN, SAEGEN: 18, ENTGRATEN: 21, BIEGEN: 13, HEFTEN: 39,
+    ...splitOrbital(91), HANDSCHWEISSEN: 0,
+    BEIZEN: 18, MOLCHEN: 0, VORMONTAGE: 12.5, HYDRO: 17, ENDKONTROLLE: 20, REINIGEN: 7.5,
+  },
   /**
    * Kleinauftrag / Zubehoer.
    *
@@ -14884,7 +14988,10 @@ const HOURS = {
    * des Zubehoers geht ueber die Reserve (12-24 Mannstunden je Woche) in
    * die Rechnung ein - dieselben Stunden also, nicht zusaetzlich.
    */
-  ZUBEHOER: { AV: 0, SAEGEN: 0, BIEGEN: 0, ORBITAL: 0, BEIZEN: 0, VORMONTAGE: 0, HYDRO: 0, ENDKONTROLLE: 0 },
+  ZUBEHOER: {
+    AV: 0, SAEGEN: 0, BIEGEN: 0, ORBITAL_KEHLNAHT: 0, ORBITAL_STUMPFNAHT: 0, HANDSCHWEISSEN: 0,
+    BEIZEN: 0, MOLCHEN: 0, VORMONTAGE: 0, HYDRO: 0, ENDKONTROLLE: 0,
+  },
 };
 
 /**
@@ -14913,9 +15020,33 @@ function defaultNetwork(withCleaning) {
     { opId: 'ENTGRATEN', predecessors: [{ opId: 'SAEGEN', type: DEP_TYPE.FS }] },
     { opId: 'BIEGEN', predecessors: [{ opId: 'ENTGRATEN', type: DEP_TYPE.FS }] },
     { opId: 'HEFTEN', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
-    { opId: 'ORBITAL', predecessors: [{ opId: 'HEFTEN', type: DEP_TYPE.OVERLAP }] },
-    { opId: 'BEIZEN', predecessors: [{ opId: 'ORBITAL', type: DEP_TYPE.FS }] },
-    { opId: 'VORMONTAGE', predecessors: [{ opId: 'BEIZEN', type: DEP_TYPE.FS }] },
+    /*
+     * Kehlnaht und Stumpfnaht Orbital (Nutzerauftrag 23.09.2026): beide
+     * ueberlappend mit Heften, KEIN Reihenfolgezwang zueinander ("Überlappend
+     * möglich" - beide koennen parallel laufen, sie teilen sich nur den
+     * Maschinen-/Schweißer-Pool, siehe scheduler.js). Handschweißen ebenso
+     * ueberlappend - eigene Qualifikation, standardmaessig 0 h.
+     */
+    { opId: 'ORBITAL_KEHLNAHT', predecessors: [{ opId: 'HEFTEN', type: DEP_TYPE.OVERLAP }] },
+    { opId: 'ORBITAL_STUMPFNAHT', predecessors: [{ opId: 'HEFTEN', type: DEP_TYPE.OVERLAP }] },
+    { opId: 'HANDSCHWEISSEN', predecessors: [{ opId: 'HEFTEN', type: DEP_TYPE.OVERLAP }] },
+    {
+      opId: 'BEIZEN',
+      predecessors: [
+        { opId: 'ORBITAL_KEHLNAHT', type: DEP_TYPE.FS },
+        { opId: 'ORBITAL_STUMPFNAHT', type: DEP_TYPE.FS },
+        { opId: 'HANDSCHWEISSEN', type: DEP_TYPE.FS },
+      ],
+    },
+    /*
+     * Molchen (Nutzerauftrag 23.09.2026): nach Beizen, vor Vormontage -
+     * keine Vorgabe zur genauen Position erhalten, das ist eine
+     * naheliegende Annahme (Leitung innen reinigen, bevor verschraubt und
+     * geprueft wird). Standardmaessig 0 h wie Handschweißen, blockiert
+     * dadurch nichts, bis je Auftrag Stunden eingetragen werden.
+     */
+    { opId: 'MOLCHEN', predecessors: [{ opId: 'BEIZEN', type: DEP_TYPE.FS }] },
+    { opId: 'VORMONTAGE', predecessors: [{ opId: 'MOLCHEN', type: DEP_TYPE.FS }] },
     { opId: 'HYDRO', predecessors: [{ opId: 'VORMONTAGE', type: DEP_TYPE.FS }] },
     { opId: 'ENDKONTROLLE', predecessors: [{ opId: 'HYDRO', type: DEP_TYPE.FS }] },
   ];
@@ -14938,9 +15069,19 @@ function zubehoerNetwork() {
     { opId: 'AV', predecessors: [] },
     { opId: 'SAEGEN', predecessors: [{ opId: 'AV', type: DEP_TYPE.FS }] },
     { opId: 'BIEGEN', predecessors: [{ opId: 'SAEGEN', type: DEP_TYPE.FS }] },
-    { opId: 'ORBITAL', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
-    { opId: 'BEIZEN', predecessors: [{ opId: 'ORBITAL', type: DEP_TYPE.FS }] },
-    { opId: 'VORMONTAGE', predecessors: [{ opId: 'BEIZEN', type: DEP_TYPE.FS }] },
+    { opId: 'ORBITAL_KEHLNAHT', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
+    { opId: 'ORBITAL_STUMPFNAHT', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
+    { opId: 'HANDSCHWEISSEN', predecessors: [{ opId: 'BIEGEN', type: DEP_TYPE.FS }] },
+    {
+      opId: 'BEIZEN',
+      predecessors: [
+        { opId: 'ORBITAL_KEHLNAHT', type: DEP_TYPE.FS },
+        { opId: 'ORBITAL_STUMPFNAHT', type: DEP_TYPE.FS },
+        { opId: 'HANDSCHWEISSEN', type: DEP_TYPE.FS },
+      ],
+    },
+    { opId: 'MOLCHEN', predecessors: [{ opId: 'BEIZEN', type: DEP_TYPE.FS }] },
+    { opId: 'VORMONTAGE', predecessors: [{ opId: 'MOLCHEN', type: DEP_TYPE.FS }] },
     { opId: 'HYDRO', predecessors: [{ opId: 'VORMONTAGE', type: DEP_TYPE.FS }] },
     { opId: 'ENDKONTROLLE', predecessors: [{ opId: 'HYDRO', type: DEP_TYPE.FS }] },
   ];
@@ -15021,11 +15162,13 @@ function defaultWorkplaces() {
   add('HE03', 'Heftplatz 3 · Reserve', 'HEFTPLATZ', false, 'Nur im Engpassszenario zugelassen.');
   for (let i = 1; i <= 6; i++) add(`OR0${i}`, `Orbitalmaschine ${i}`, 'ORBITAL');
   add('BE01', 'Beizen', 'BEIZE');
+  add('MO01', 'Molchen', 'MOLCHEN', true, 'Keine Platzgrenze hinterlegt – dazu liegt keine Angabe vor.');
   add('DK01', 'DKR-Vormontage 1', 'MONTAGE');
   add('DK02', 'DKR-Vormontage 2 · Reserve', 'MONTAGE', false, 'Ohne zusätzliche Besetzung Reserve.');
   add('HY01', 'Hydroprüfung', 'HYDRO', true, 'Ausschließlich Dienstag bis Donnerstag.');
   add('EK01', 'Endkontrolle', 'QS');
   add('RE01', 'Reinigen', 'REINIGUNG');
+  add('HS01', 'Handschweißplatz', 'HANDSCHWEISSEN');
   // Arbeitsvorbereitung: Schreibtischarbeit, kein Werkstattplatz. Sie
   // bindet Personal und steht deshalb als eigener "Platz" ohne Begrenzung.
   add('AV01', 'Arbeitsvorbereitung', 'AV', true, 'Kein Werkstattplatz – bindet nur Personal.');
@@ -15136,6 +15279,11 @@ function defaultPlaces() {
         + 'Helfer zuarbeiten (Werte zu validieren)',
     },
     REINIGEN: { places: 1, workersPerPlace: 1 },
+    /*
+     * Handschweißen (Nutzerauftrag 23.09.2026): "1 Handschweißplatz 1
+     * Mann" - fester, kleiner Platz, kein Aushilfe-Mechanismus.
+     */
+    HANDSCHWEISSEN: { places: 1, workersPerPlace: 1, note: 'ein Platz, ein Mann' },
   };
 }
 
@@ -15544,7 +15692,7 @@ __defs["engine/capacity.js"] = function (__exports, __req) {
  */
 
 const { OPERATIONS, OPERATION_BY_ID, round2 } = __req("engine/model.js");
-const { teamOn, skillShares, mentoringHoursOfTeam } = __req("engine/team.js");
+const { teamOn, skillShares, mentoringHoursOfTeam, personEffectiveFactor } = __req("engine/team.js");
 const { weekday, weekKey, diffDays, mondayOf } = __req("engine/calendar.js");
 
 /** @type {{REGULAR:'REGULAR', SATURDAY:'SATURDAY', OFF:'OFF'}} */
@@ -15866,15 +16014,22 @@ function placesFor(config, opId) {
   const res = config.resources ?? {};
   // Platzgrenzen lassen sich gemeinsam abschalten - zum Vergleich "mit und
   // ohne", nicht fuer den Dauerbetrieb.
-  if (res.enforcePlaces === false && opId !== 'ORBITAL' && opId !== 'HEFTEN') return null;
+  if (res.enforcePlaces === false && opId !== 'ORBITAL' && opId !== 'ORBITAL_KEHLNAHT'
+    && opId !== 'ORBITAL_STUMPFNAHT' && opId !== 'HEFTEN' && opId !== 'HANDSCHWEISSEN') return null;
   const own = res.byOperation?.[opId]?.places;
   if (own != null && own !== '') return Math.max(0, Number(own));
+  /*
+   * Kehlnaht und Stumpfnaht Orbital fallen ohne eigenen Wert auf dieselbe
+   * Maschinenzahl zurueck wie die alte Ressource 'ORBITAL' (Nutzerauftrag
+   * 23.09.2026 - sie teilen sich denselben Topf).
+   */
+  const fallbackKey = (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') ? 'ORBITAL' : opId;
   const fallback = {
     HEFTEN: res.heftPlaces,
     ORBITAL: res.orbitalMachinesActive ?? res.orbitalMachines,
     HYDRO: res.hydroStations,
     BEIZEN: res.beizStations,
-  }[opId];
+  }[fallbackKey];
   if (fallback == null || fallback === '') return null;
   return Math.max(0, Number(fallback));
 }
@@ -15988,7 +16143,17 @@ function weldersFor(config, date, kind) {
   if (config.workforce?.team?.source === 'MANNSCHAFT'
     && config.workforce?.team?.enforceSkills !== false) {
     const on = teamOn(config, date);
-    const n2 = on.byOp?.ORBITAL?.factor ?? 0;
+    /*
+     * Orbitalschweisser = wer fuer Kehlnaht ODER Stumpfnaht qualifiziert
+     * ist (Vereinigungsmenge, nicht Summe - sonst zaehlte eine fuer beides
+     * qualifizierte Person doppelt). Beide teilen sich denselben
+     * Maschinen-/Schweisser-Pool (siehe model.js, capacityGroup).
+     */
+    const kehl = on.byOp?.ORBITAL_KEHLNAHT?.ids ?? [];
+    const stumpf = on.byOp?.ORBITAL_STUMPFNAHT?.ids ?? [];
+    const idSet = new Set([...kehl, ...stumpf]);
+    const n2 = on.present.filter((p) => idSet.has(p.id))
+      .reduce((a, p) => a + personEffectiveFactor(config, p, date), 0);
     return kind === DAY_KIND.SATURDAY ? round2(n2 * saturdayQuota(config, date)) : round2(n2);
   }
   let n;
@@ -16159,7 +16324,15 @@ function dayCapacity(config, date) {
       const placeCap = heftPlaces * workersPerHeftPlace * opWindow * prod;
       detail.heftPlaceCap = round2(placeCap);
       if (placeCap < capUnits) { capUnits = placeCap; limiter = LIMITER.HEFTPLATZ; }
-    } else if (op.id === 'ORBITAL') {
+    } else if (op.id === 'ORBITAL_KEHLNAHT' || op.id === 'ORBITAL_STUMPFNAHT') {
+      /*
+       * Kehlnaht und Stumpfnaht teilen sich denselben Maschinen-/
+       * Schweißer-Pool - hier bekommt deshalb JEDER der beiden Arbeitsgaenge
+       * dieselbe Obergrenze (das, was der GANZE Topf hergeben wuerde). Dass
+       * die beiden sich den Topf teilen und nicht gemeinsam das Doppelte
+       * bekommen, stellt scheduler.js sicher (capacityGroupSiblings): was
+       * der eine verbraucht, wird dem anderen ebenfalls abgezogen.
+       */
       // Arbeitsinhalt in Mannstunden. Zwei getrennte Restriktionen:
       //  - Maschinen: je Schweisser koennen mehrere Maschinen bedient werden,
       //    die Maschinen begrenzen daher die gleichzeitig einsetzbaren Schweisser.
@@ -16610,7 +16783,7 @@ __defs["engine/scheduler.js"] = function (__exports, __req) {
  * ineinandergreifen koennen.
  */
 
-const { OPERATION_BY_ID, PROJECT_STATUS, DEP_TYPE, round2 } = __req("engine/model.js");
+const { OPERATION_BY_ID, PROJECT_STATUS, DEP_TYPE, round2, capacityGroupSiblings } = __req("engine/model.js");
 const { dayCapacity, DAY_KIND, LIMITER } = __req("engine/capacity.js");
 const { resolveRouting, topoSort } = __req("engine/routing.js");
 const { addDays, addWeeks, cmpDate, dateRange, weekKey, diffDays } = __req("engine/calendar.js");
@@ -17177,6 +17350,18 @@ function allocateProjectDay(st, ctx, bypassProjectLimit = false) {
 
       ctx.poolRest = clampHours(ctx.poolRest - man);
       ctx.opRest[op.opId] = clampHours(capOpUnits - granted);
+      /*
+       * Geteilter Kapazitaetstopf (Nutzerauftrag 23.09.2026): Kehlnaht und
+       * Stumpfnaht Orbital nutzen dieselben Maschinen und denselben
+       * Schweißer-Pool. Was der eine Arbeitsgang heute verbraucht, fehlt
+       * dem anderen - deshalb wird hier bei jedem Geschwister-Arbeitsgang
+       * derselbe Betrag mit abgezogen, statt beiden unabhaengig den vollen
+       * Topf zu geben (das wuerde die Maschinenkapazitaet verdoppeln).
+       */
+      for (const sib of capacityGroupSiblings(op.opId)) {
+        if (ctx.opRest[sib] == null) continue;
+        ctx.opRest[sib] = clampHours(ctx.opRest[sib] - granted);
+      }
       /*
        * Vom Auftrag geht nur der ARBEITSINHALT ab. Der Mehraufwand der
        * Aushilfe kostet Arbeitszeit (Pool), macht den Auftrag aber nicht
@@ -17769,7 +17954,8 @@ function workplaceLoad(result, workplaces, weeks) {
     const type = OPERATION_BY_ID[op.id].workplaceType;
     const places = countFor(type, op.id);
     if (places <= 0) continue;
-    const machineFactor = op.id === 'ORBITAL' ? perWelder : 1;
+    const istOrbital = op.id === 'ORBITAL_KEHLNAHT' || op.id === 'ORBITAL_STUMPFNAHT';
+    const machineFactor = istOrbital ? perWelder : 1;
     /*
      * Aushilfe (Nutzeranforderung 25.09.2026) hebt die Platzgrenze bewusst
      * an diesem Arbeitsgang - sonst schiene die Auslastung hier ueber
@@ -17816,7 +18002,14 @@ function workplaceLoad(result, workplaces, weeks) {
       name: op.name,
       type,
       places,
-      unit: op.id === 'ORBITAL' ? 'Maschinenstunden' : 'Platzstunden',
+      unit: istOrbital ? 'Maschinenstunden' : 'Platzstunden',
+      /*
+       * Kehlnaht und Stumpfnaht Orbital teilen sich denselben Maschinen-
+       * /Schweißer-Topf (Nutzerauftrag 23.09.2026) - die hier gezeigte
+       * Kapazität gilt für BEIDE zusammen, nicht für jeden einzeln zusätzlich.
+       */
+      sharedCapacityWith: istOrbital
+        ? (op.id === 'ORBITAL_KEHLNAHT' ? 'ORBITAL_STUMPFNAHT' : 'ORBITAL_KEHLNAHT') : null,
       workplaceNames: (byType[type] ?? []).map((w) => w.name),
       totalHours,
       /** Mögliche Belegungsstunden über den gesamten Zeitraum */
@@ -18127,7 +18320,7 @@ function dashboardKpis(result, weeks, range = {}) {
    * `windowEnd`), nicht `lastRelevant` (das Ende des ganzen
    * Auftragsbestands, unabhaengig von der Auswahl).
    */
-  const orbital = processUtilization(result, 'ORBITAL', windowEnd, windowStart);
+  const orbital = orbitalUtilization(result, windowEnd, windowStart);
   const heft = processUtilization(result, 'HEFTEN', windowEnd, windowStart);
   const shortfall = deadlineShortfall(result, windowEnd);
 
@@ -18289,6 +18482,39 @@ function processUtilization(result, opId, until, from = null) {
     opId,
     name: OPERATION_BY_ID[opId]?.name ?? opId,
     unit: OPERATION_BY_ID[opId]?.unit,
+    capacity: round2(cap),
+    used: round2(used),
+    utilization: cap > 0 ? round2((used / cap) * 100) : 0,
+    days: capDays,
+  };
+}
+
+/**
+ * Kombinierte Auslastung von Kehlnaht und Stumpfnaht Orbital - dieselbe
+ * Ergebnisform wie processUtilization(), aber ueber den GEMEINSAMEN
+ * Maschinentopf gerechnet (Nutzerauftrag 23.09.2026): die Kapazitaet wird
+ * nur einmal gezaehlt, der Verbrauch aus beiden Arbeitsgaengen zusammen.
+ * @param {any} result @param {string|null} until @param {string|null} [from]
+ */
+function orbitalUtilization(result, until, from = null) {
+  let cap = 0;
+  let used = 0;
+  let capDays = 0;
+  for (const d of result.daySeries) {
+    if (from && cmpDate(d.date, from) < 0) continue;
+    if (until && cmpDate(d.date, until) > 0) break;
+    const kehl = d.byOp.ORBITAL_KEHLNAHT;
+    const stumpf = d.byOp.ORBITAL_STUMPFNAHT;
+    if (!kehl && !stumpf) continue;
+    const capHeute = kehl?.capUnits ?? stumpf?.capUnits ?? 0;
+    cap += capHeute;
+    used += (kehl?.usedUnits ?? 0) + (stumpf?.usedUnits ?? 0);
+    if (capHeute > 0) capDays++;
+  }
+  return {
+    opId: 'ORBITAL',
+    name: 'Orbitalschweißen (Kehlnaht + Stumpfnaht)',
+    unit: 'Mannstunden',
     capacity: round2(cap),
     used: round2(used),
     utilization: cap > 0 ? round2((used / cap) * 100) : 0,
@@ -18591,11 +18817,18 @@ function orbitalReport(result, until, from = null) {
   for (const d of result.daySeries) {
     if (from && cmpDate(d.date, from) < 0) continue;
     if (until && cmpDate(d.date, until) > 0) break;
-    const v = d.byOp.ORBITAL;
-    if (!v || d.poolCapacity <= 0) continue;
-    machineHoursCap += v.capUnits;
-    machineHoursNeeded += v.usedUnits;
-    manHours += v.usedManHours;
+    const kehl = d.byOp.ORBITAL_KEHLNAHT;
+    const stumpf = d.byOp.ORBITAL_STUMPFNAHT;
+    if ((!kehl && !stumpf) || d.poolCapacity <= 0) continue;
+    /*
+     * Kehlnaht und Stumpfnaht teilen sich denselben Maschinen-Topf
+     * (Nutzerauftrag 23.09.2026) - die Kapazitaet (capUnits) ist bei
+     * beiden gleich hoch und wird deshalb nur EINMAL gezaehlt. Verbraucht
+     * (usedUnits/usedManHours) wird dagegen aus BEIDEN zusammengezaehlt.
+     */
+    machineHoursCap += kehl?.capUnits ?? stumpf?.capUnits ?? 0;
+    machineHoursNeeded += (kehl?.usedUnits ?? 0) + (stumpf?.usedUnits ?? 0);
+    manHours += (kehl?.usedManHours ?? 0) + (stumpf?.usedManHours ?? 0);
     welderSum += d.resources.welders;
     usableSum += d.resources.orbitalMachinesUsable;
     days++;
@@ -19502,8 +19735,21 @@ const OPERATION_WORDS = {
   ENTGRATEN: ['entgraten', 'entgratung', 'entgrater'],
   BIEGEN: ['biegen', 'biegerei', 'rohrbiegen', 'gebogen'],
   HEFTEN: ['heften', 'heftplatz', 'heftplätze', 'tacken', 'geheftet', 'heftung'],
-  ORBITAL: ['orbitalschweißen', 'orbitalschweissen', 'orbital', 'schweißen', 'schweissen', 'wig', 'orbitalmaschine'],
+  /*
+   * Orbitalschweissen aufgeteilt in Kehlnaht und Stumpfnaht (Nutzerauftrag
+   * 23.09.2026). Die eigenen Begriffe ("kehlnaht", "stumpfnaht") treffen nur
+   * den jeweiligen Arbeitsgang; die allgemeinen Begriffe ("orbital",
+   * "schweißen", "wig", ...) stehen bewusst bei BEIDEN - eine Regel ohne
+   * Nahtart soll beide treffen, sie teilen sich ohnehin denselben Topf.
+   */
+  ORBITAL_KEHLNAHT: ['kehlnaht orbital', 'kehlnahtschweißen', 'kehlnahtschweissen', 'kehlnaht',
+    'orbitalschweißen', 'orbitalschweissen', 'orbital', 'schweißen', 'schweissen', 'wig', 'orbitalmaschine'],
+  ORBITAL_STUMPFNAHT: ['stumpfnaht orbital', 'stumpfnahtschweißen', 'stumpfnahtschweissen', 'stumpfnaht',
+    'orbitalschweißen', 'orbitalschweissen', 'orbital', 'schweißen', 'schweissen', 'wig', 'orbitalmaschine'],
+  HANDSCHWEISSEN: ['handschweißen', 'handschweissen', 'von hand schweißen', 'von hand schweissen',
+    'von hand geschweißt', 'von hand geschweisst', 'handschweißplatz'],
   BEIZEN: ['beizen', 'beize', 'passivieren', 'gebeizt'],
+  MOLCHEN: ['molchen', 'molch', 'molcher', 'gemolcht', 'leitung reinigen'],
   VORMONTAGE: ['doppelklemmring', 'doppelklemmringmontage', 'dkr', 'verschraubung', 'verschraubungen',
     'klemmring', 'klemmringe', 'vormontage', 'montage der verschraubungen'],
   HYDRO: ['hydro', 'hydroprüfung', 'hydropruefung', 'abdrücken', 'abdruecken', 'druckprüfung', 'druckpruefung', 'druckprobe'],
@@ -20901,7 +21147,7 @@ function seedProjects() {
     P({ id: 'PRJ-WGC40S00449', orderNo: 'WGC40-S00449', customer: "Orlen P1", name: "Orlen P1 WGC40-S00449", projectType: 'NEUBAU', variant: 'FT40', dueDate: '2026-10-26', handoverDate: '2026-11-13', priority: 'P3', sequence: 200, totalHoursOverride: 246.01 }),  // P20
     P({ id: 'PRJ-WGC40S00454', orderNo: 'WGC40-S00454', customer: "Orlen P1", name: "Orlen P1 WGC40-S00454", projectType: 'NEUBAU', variant: 'FT40', dueDate: '2026-10-26', handoverDate: '2026-11-18', priority: 'P3', sequence: 210, totalHoursOverride: 246.01 }),  // P21
     P({ id: 'PRJ-WGC30S00023', orderNo: 'WGC30-S00023', customer: "Lhyfe", name: "Lhyfe WGC30-S00023", projectType: 'UMBAU', variant: 'FT30', dueDate: '2026-11-12', handoverDate: '2026-11-18', priority: 'P3', sequence: 220, totalHoursOverride: 106.5 }),  // P22
-    P({ id: 'PRJ-WGC40S00', orderNo: 'WGC40-S00%%%', customer: "Infraserv", name: "Infraserv WGC40-S00%%%", projectType: 'WKP', variant: 'FT40', dueDate: '2027-02-01', handoverDate: '2026-10-18', priority: 'P3', sequence: 230, operations: [{ opId: 'SAEGEN', status: 'X' }, { opId: 'ENTGRATEN', status: 'X' }, { opId: 'BIEGEN', status: 'X' }, { opId: 'HEFTEN', status: 'X' }, { opId: 'ORBITAL', plannedHours: 30 }, { opId: 'BEIZEN', plannedHours: 4 }, { opId: 'VORMONTAGE', status: 'X' }, { opId: 'HYDRO', plannedHours: 17 }, { opId: 'ENDKONTROLLE', plannedHours: 12 }, { opId: 'REINIGEN', plannedHours: 7.5 }], totalHoursOverride: null }),  // P23
+    P({ id: 'PRJ-WGC40S00', orderNo: 'WGC40-S00%%%', customer: "Infraserv", name: "Infraserv WGC40-S00%%%", projectType: 'WKP', variant: 'FT40', dueDate: '2027-02-01', handoverDate: '2026-10-18', priority: 'P3', sequence: 230, operations: [{ opId: 'SAEGEN', status: 'X' }, { opId: 'ENTGRATEN', status: 'X' }, { opId: 'BIEGEN', status: 'X' }, { opId: 'HEFTEN', status: 'X' }, { opId: 'ORBITAL_KEHLNAHT', plannedHours: 10 }, { opId: 'ORBITAL_STUMPFNAHT', plannedHours: 20 }, { opId: 'BEIZEN', plannedHours: 4 }, { opId: 'VORMONTAGE', status: 'X' }, { opId: 'HYDRO', plannedHours: 17 }, { opId: 'ENDKONTROLLE', plannedHours: 12 }, { opId: 'REINIGEN', plannedHours: 7.5 }], totalHoursOverride: null }),  // P23
     P({ id: 'PRJ-WGC20S00156', orderNo: 'WGC20-S00156', customer: "Lhyfe", name: "Lhyfe WGC20-S00156", projectType: 'UMBAU', variant: 'FT20', dueDate: '2026-11-12', handoverDate: '2026-11-18', priority: 'P3', sequence: 240, totalHoursOverride: 106.5 }),  // P24
     P({ id: 'PRJ-WGC40S00441', orderNo: 'WGC40-S00441', customer: "SWF", name: "SWF WGC40-S00441", projectType: 'NEUBAU', variant: 'FT40', dueDate: '2026-11-16', handoverDate: '2026-11-27', priority: 'P3', sequence: 250, totalHoursOverride: 260 }),  // P25
     P({ id: 'PRJ-WGC40S00455', orderNo: 'WGC40-S00455', customer: "Orlen P1", name: "Orlen P1 WGC40-S00455", projectType: 'NEUBAU', variant: 'FT40', dueDate: '2026-11-09', handoverDate: '2026-11-30', priority: 'P3', sequence: 260, totalHoursOverride: 246.01 }),  // P26
@@ -21089,9 +21335,33 @@ const ABSENCE_KINDS = {
   SONST: 'Sonstiges',
 };
 
-/** Alle Arbeitsgaenge angehakt. */
-function allSkills(value = true) {
-  /** @type {Record<string, boolean>} */
+/*
+ * Skill-Level statt Ja/Nein (Nutzerauftrag 23.09.2026: "ein skill level für
+ * MA an den verschiedenen Arbeitsplätzen ... Wenn MA xy mit dem besten
+ * skill nicht da ist wird er durch denjenigen mit dem nächst höheren
+ * ersetzt"). Wirkt NUR auf die Rangfolge, wer zuerst eingeteilt wird - die
+ * Bearbeitungszeit bleibt fuer alle Stufen gleich (Nutzerentscheidung).
+ *
+ * 0 gilt als "nicht qualifiziert" - identisch zum bisherigen `false`, jeder
+ * truthy-Check (`p.skills?.[opId]`) funktioniert dadurch unveraendert.
+ */
+const SKILL_LEVELS = {
+  0: 'nicht qualifiziert',
+  1: 'Grundkenntnisse',
+  2: 'Fortgeschritten',
+  3: 'Experte',
+};
+
+/**
+ * Alle Arbeitsgaenge auf Skill-Level `value`.
+ *
+ * `value=2` (Fortgeschritten) als Startwert entspricht dem bisherigen
+ * `true` ("kann") - eine unbelegte Annahme, kein Messwert. Echte Stufen je
+ * Person muessen von der Abteilung noch gepflegt werden (siehe
+ * docs/ZU-VALIDIEREN.md).
+ */
+function allSkills(value = 2) {
+  /** @type {Record<string, number>} */
   const out = {};
   for (const op of OPERATIONS) out[op.id] = value;
   return out;
@@ -21126,7 +21396,7 @@ function person(id, o = {}) {
     rate: o.rate ?? null,
     /** Darf in Spaet- und Nachtschicht eingesetzt werden */
     shiftCapable: o.shiftCapable !== false,
-    skills: allSkills(true),
+    skills: allSkills(),
     /** @type {{from:string, to:string, kind:string, note?:string}[]} */
     absences: [],
     /**
@@ -21594,6 +21864,7 @@ function mitZusatzPersonal(config, anzahl, ab, opts = {}) {
   __exports["mitZusatzPersonal"] = mitZusatzPersonal;
   __exports["SHIFTS"] = SHIFTS;
   __exports["ABSENCE_KINDS"] = ABSENCE_KINDS;
+  __exports["SKILL_LEVELS"] = SKILL_LEVELS;
   __exports["PERSON_KINDS"] = PERSON_KINDS;
   __exports["FACTORS"] = FACTORS;
   __exports["ZUGESAGTE_LEIHE"] = ZUGESAGTE_LEIHE;
@@ -21745,7 +22016,7 @@ function koepfeJeSchicht(config, opId) {
    * die Fruehschicht kuenstlich aufgeblaeht (11 statt 8 Leute), sodass die
    * Spaetschicht leer blieb.
    */
-  if (opId === 'ORBITAL') {
+  if (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') {
     const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));
     return Math.max(1, Math.floor(Number(plaetze) / jeSchweisser));
   }
@@ -22143,7 +22414,7 @@ function fehlendePlaetze(config, result, schichten) {
      * Schweisser, und eine zweite Schicht hilft nur mit schichtfaehigen
      * Schweissern.
      */
-    const ueberMaschinen = opId === 'ORBITAL';
+    const ueberMaschinen = opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT';
     const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));
     out.push({
       opId,
@@ -22248,9 +22519,20 @@ function wochenSchichten(config, wochen, personen) {
   for (let sn = 1; sn <= maxSchichten; sn++) {
     let alle = 0;
     let exklusiv = 0;
+    /*
+     * Geteilter Kapazitaetstopf (Nutzerauftrag 23.09.2026): Kehlnaht und
+     * Stumpfnaht Orbital teilen sich dieselben Koepfe - sonst wuerden hier
+     * doppelt so viele Schweisser verlangt, wie es Maschinen gibt.
+     */
+    const gezaehlteGruppen = new Set();
     for (const [opId, n] of Object.entries(schichten)) {
       const stufen = Math.max(1, Math.floor(n));
       if (stufen < sn) continue;
+      const gruppe = OPERATION_BY_ID[opId]?.capacityGroup;
+      if (gruppe) {
+        if (gezaehlteGruppen.has(gruppe)) continue;
+        gezaehlteGruppen.add(gruppe);
+      }
       const koepfe = koepfeJeSchicht(config, opId);
       alle += koepfe;
       if (stufen === sn && sn === 1) exklusiv += koepfe;
@@ -23043,7 +23325,15 @@ function assignPeople(result, config, range = {}) {
            */
           let beste = null;
           for (let sn = 1; sn <= opSchichten; sn++) {
-            const drauf = besetzt(`${a.opId}#${sn}`);
+            /*
+             * Geteilter Platz (Nutzerauftrag 23.09.2026): Kehlnaht und
+             * Stumpfnaht Orbital teilen sich dieselben Maschinen - wer dort
+             * schon steht, blockiert denselben Platz auch fuer den jeweils
+             * anderen Arbeitsgang. Der Schluessel gilt deshalb je
+             * Kapazitaetstopf (capacityGroup), nicht je Arbeitsgang.
+             */
+            const gruppe = OPERATION_BY_ID[a.opId]?.capacityGroup ?? a.opId;
+            const drauf = besetzt(`${gruppe}#${sn}`);
             const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
             const frei = anwesend.filter((p) => p.skills?.[a.opId] && rest[p.id] > 0.01
               && (schichtVon[p.id] ?? 1) === sn
@@ -23066,6 +23356,16 @@ function assignPeople(result, config, range = {}) {
            * wie alle anderen.
            */
           koennen.sort((x, y) => {
+            /*
+             * Skill-Rangfolge zuerst (Nutzerauftrag 23.09.2026: "Wenn MA xy
+             * mit dem besten skill nicht da ist wird er durch denjenigen
+             * mit dem nächst höheren ersetzt"). Wirkt nur auf die
+             * Reihenfolge, nicht auf die Arbeitszeit - bei Gleichstand
+             * entscheidet wie bisher die Auslastung.
+             */
+            const skillX = Number(x.skills?.[a.opId] ?? 0);
+            const skillY = Number(y.skills?.[a.opId] ?? 0);
+            if (skillX !== skillY) return skillY - skillX;
             const lx = byPerson[x.id].hours / Math.max(0.1, byPerson[x.id].factor);
             const ly = byPerson[y.id].hours / Math.max(0.1, byPerson[y.id].factor);
             if (Math.abs(lx - ly) > 0.01) return lx - ly;
@@ -23282,9 +23582,11 @@ function assignPeople(result, config, range = {}) {
  * @param {any} config @param {string} opId @param {any} day Tagesreihe
  */
 function plaetzeAm(config, opId, day) {
-  if (opId === 'ORBITAL') {
+  if (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') {
     // Die Maschinen begrenzen die Schweisser: ein Schweisser bedient
-    // mehrere Maschinen, mehr Schweisser bringen also nichts.
+    // mehrere Maschinen, mehr Schweisser bringen also nichts. Kehlnaht und
+    // Stumpfnaht teilen sich denselben Maschinen-Topf (siehe oben, geteilter
+    // Platz-Schluessel).
     const nutzbar = Number(day?.resources?.orbitalMachinesUsable
       ?? placesFor(config, 'ORBITAL') ?? 0);
     const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));
@@ -24929,7 +25231,9 @@ function arbeitsplatzZeilen(input, result, tage, projekte) {
 /** Wie viele Plaetze hat ein Arbeitsgang? */
 function platzZahl(cfg, opId) {
   if (opId === 'HEFTEN') return Number(cfg.resources?.heftPlaces ?? 1);
-  if (opId === 'ORBITAL') return Number(cfg.resources?.orbitalMachinesActive ?? cfg.resources?.orbitalMachines ?? 1);
+  if (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') {
+    return Number(cfg.resources?.orbitalMachinesActive ?? cfg.resources?.orbitalMachines ?? 1);
+  }
   const eigen = cfg.resources?.byOperation?.[opId];
   return eigen?.places == null ? null : Number(eigen.places);
 }

@@ -280,8 +280,9 @@ export function render(a) {
               h('button.btn.btn--sm', { style: { marginLeft: '6px' }, onclick: () => a.navigate('team') },
                 'Mannschaft öffnen')),
             h('div.small.muted', { style: { marginTop: '8px' } },
-              `Derzeit sind ${an.team?.byOperation?.find((x) => x.opId === 'ORBITAL')?.qualified ?? '–'} `
-              + 'Personen für das Orbitalschweißen angehakt. Die Maschinen begrenzen zusätzlich: '
+              `Derzeit sind ${an.team?.byOperation?.find((x) => x.opId === 'ORBITAL_KEHLNAHT')?.qualified ?? '–'} `
+              + `für Kehlnaht und ${an.team?.byOperation?.find((x) => x.opId === 'ORBITAL_STUMPFNAHT')?.qualified ?? '–'} `
+              + 'für Stumpfnaht Orbital angehakt (beide teilen sich dieselben Maschinen). Die Maschinen begrenzen zusätzlich: '
               + `${cfg.resources.orbitalMachinesActive} Maschinen ÷ ${cfg.resources.machinesPerWelder} `
               + `je Schweißer = höchstens ${Math.floor(Number(cfg.resources.orbitalMachinesActive)
                 / Math.max(1, Number(cfg.resources.machinesPerWelder)))} gleichzeitig.`))

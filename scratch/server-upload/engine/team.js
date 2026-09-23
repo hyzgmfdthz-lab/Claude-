@@ -38,9 +38,33 @@ export const ABSENCE_KINDS = {
   SONST: 'Sonstiges',
 };
 
-/** Alle Arbeitsgaenge angehakt. */
-function allSkills(value = true) {
-  /** @type {Record<string, boolean>} */
+/*
+ * Skill-Level statt Ja/Nein (Nutzerauftrag 23.09.2026: "ein skill level für
+ * MA an den verschiedenen Arbeitsplätzen ... Wenn MA xy mit dem besten
+ * skill nicht da ist wird er durch denjenigen mit dem nächst höheren
+ * ersetzt"). Wirkt NUR auf die Rangfolge, wer zuerst eingeteilt wird - die
+ * Bearbeitungszeit bleibt fuer alle Stufen gleich (Nutzerentscheidung).
+ *
+ * 0 gilt als "nicht qualifiziert" - identisch zum bisherigen `false`, jeder
+ * truthy-Check (`p.skills?.[opId]`) funktioniert dadurch unveraendert.
+ */
+export const SKILL_LEVELS = {
+  0: 'nicht qualifiziert',
+  1: 'Grundkenntnisse',
+  2: 'Fortgeschritten',
+  3: 'Experte',
+};
+
+/**
+ * Alle Arbeitsgaenge auf Skill-Level `value`.
+ *
+ * `value=2` (Fortgeschritten) als Startwert entspricht dem bisherigen
+ * `true` ("kann") - eine unbelegte Annahme, kein Messwert. Echte Stufen je
+ * Person muessen von der Abteilung noch gepflegt werden (siehe
+ * docs/ZU-VALIDIEREN.md).
+ */
+function allSkills(value = 2) {
+  /** @type {Record<string, number>} */
   const out = {};
   for (const op of OPERATIONS) out[op.id] = value;
   return out;
@@ -75,7 +99,7 @@ function person(id, o = {}) {
     rate: o.rate ?? null,
     /** Darf in Spaet- und Nachtschicht eingesetzt werden */
     shiftCapable: o.shiftCapable !== false,
-    skills: allSkills(true),
+    skills: allSkills(),
     /** @type {{from:string, to:string, kind:string, note?:string}[]} */
     absences: [],
     /**
