@@ -290,12 +290,43 @@ export const app = {
     if (!this.ready) { mount(root, h('div.empty', 'Lade …')); return; }
     if (!this.user) { mount(root, loginView(this)); return; }
     if (!this.state) { mount(root, h('div.empty', 'Lade …')); return; }
+    /*
+     * FIX (Nutzermeldung 23.09.2026, "das Tool scrollt bei jeder Änderung
+     * wieder nach oben"): render() baut das gesamte div.content bei JEDER
+     * Änderung (jedes patchConfig -> recalc -> render) neu auf - das neue
+     * Element beginnt zwangsläufig bei scrollTop 0. Bleibt Bereich und
+     * Reiter gleich (eine Eingabe, keine Navigation), wird die Position
+     * des ALTEN .content-Elements deshalb auf das neue übertragen, damit
+     * eine Eingabe mitten in einer langen Tabelle nicht den Bildschirm
+     * nach oben reißt. Wechselt Bereich oder Reiter (echte Navigation),
+     * bleibt es bewusst bei scrollTop 0 - eine neue Seite startet oben.
+     */
+    const altesContent = root.querySelector('.content');
+    const gleicheStelle = this._letzteRoute === `${this.area}/${this.tab}`;
+    const scrollPosition = gleicheStelle ? (altesContent?.scrollTop ?? 0) : 0;
+    this._letzteRoute = `${this.area}/${this.tab}`;
     mount(root, sidebar(this), h('div.main',
       topbar(this),
       tabbar(this),
       h('div.content',
         this.catchUpData && catchUpPanel(this, this.catchUpData),
         body(this))));
+    const neuesContent = root.querySelector('.content');
+    if (neuesContent && scrollPosition > 0) {
+      neuesContent.scrollTop = scrollPosition;
+      /*
+       * Viele Ansichten (z. B. Mannschaft) rendern zunaechst ein Geruest
+       * und laden ihren eigentlichen Inhalt NACHTRAEGLICH asynchron
+       * (eigenes container.replaceChildren, ausserhalb dieses render()).
+       * In diesem Moment ist .content oft noch zu kurz fuer die alte
+       * Scrollposition - sie wird auf 0 gekappt, bevor der Inhalt da ist.
+       * Ein ResizeObserver haelt die Position deshalb kurzzeitig nach, bis
+       * der Nachlade-Inhalt steht, und schaltet sich danach von selbst ab.
+       */
+      const ro = new ResizeObserver(() => { neuesContent.scrollTop = scrollPosition; });
+      ro.observe(neuesContent);
+      setTimeout(() => ro.disconnect(), 1500);
+    }
     // Ein offenes Stellschrauben-Panel bleibt offen und zeigt die neuen Werte
     if (this.ui.panel === 'stellschrauben') openStellschrauben(this);
   },

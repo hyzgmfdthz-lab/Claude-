@@ -171,16 +171,19 @@ export function render(a) {
           'Die Kosten werden nur ausgewiesen, nie optimiert – die Termintreue steht darüber. '
           + 'Beim Leiharbeiter ist der Satz ein Rechnungssatz; Arbeitgeberanteile kommen dort nicht dazu.'),
         h('div.grid.grid--form',
+          /*
+           * Nutzervorgabe (23.09.2026): "Schmeiß den Hinweis zu Validieren
+           * bei den Kosten raus." Die validate/validateHint-Markierungen
+           * (amberfarbenes "zu validieren"-Schild) sind hier entfernt; die
+           * reine Sacherklärung (hint) bleibt, wo sie eigenständig
+           * informativ ist.
+           */
           field('Stundenlohn Stamm (€)', cfg.costs?.baseRate ?? 22.5, (v) => set({ costs: { baseRate: v } }), {
             type: 'number', min: 0, step: 0.5,
-            validate: cfg.costs?.baseRateValidated === false,
-            validateHint: 'Auskunft 09/2026: 19–26 €. Hinterlegt ist der Mittelwert, je Person in der Mannschaft änderbar.',
             hint: 'Lohn, nicht Vollkosten.',
           }),
           field('Arbeitgeberanteile (Faktor)', cfg.costs?.employerFactor ?? 1.3, (v) => set({ costs: { employerFactor: v } }), {
             type: 'number', min: 1, step: 0.05,
-            validate: cfg.costs?.employerFactorValidated === false,
-            validateHint: 'Vorgabe 1,3 – durch das Controlling zu bestätigen.',
             hint: 'Wirkt auf den Lohn, nicht auf Leiharbeit.',
           }),
           field('Mehrarbeit (% Zuschlag)', cfg.costs?.overtimeSurchargePercent ?? 35, (v) => set({ costs: { overtimeSurchargePercent: v } }), { type: 'number', min: 0, step: 5 }),
@@ -189,8 +192,6 @@ export function render(a) {
           field('Nachtschicht (% Zuschlag)', cfg.costs?.nightSurchargePercent ?? 40, (v) => set({ costs: { nightSurchargePercent: v } }), { type: 'number', min: 0, step: 5 }),
           field('Leiharbeiter (€ je Stunde)', cfg.costs?.tempRate ?? 55, (v) => set({ costs: { tempRate: v } }), {
             type: 'number', min: 0, step: 1,
-            validate: cfg.costs?.tempRateValidated === false,
-            validateHint: 'Spanne 45–65 € – je Person in der Mannschaft änderbar.',
           })),
         an.costs && h('div', { style: { marginTop: '10px' } },
           table([

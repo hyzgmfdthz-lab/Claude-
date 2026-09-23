@@ -303,6 +303,18 @@ input[type=search], input[type=time], input[type=email], select, textarea {
 }
 input::placeholder, textarea::placeholder { color: var(--c-input-placeholder); opacity: 1; }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--c-primary); outline-offset: -1px; border-color: var(--c-primary); }
+/*
+ * Skill-Level-Auswahl in der Qualifikationsmatrix (Nutzermeldung
+ * 23.09.2026: "die Zahlen sind verschoben und hinter dem Pfeil vom
+ * Dropdown-Menü"). Die allgemeine select-Regel oben reserviert nur 8px
+ * rechts - zu wenig für den nativen Pfeil in einer so schmalen Spalte,
+ * die Ziffer landet optisch hinter ihm. Eigene, schmalere Regel mit mehr
+ * Platz für den Pfeil und einer Mindestbreite, damit die Ziffer immer frei
+ * bleibt.
+ */
+select.skill-select {
+  width: auto; min-width: 44px; padding: 4px 20px 4px 6px; text-align: center;
+}
 /* Im Dunkelmodus ist das Kalendersymbol sonst schwarz auf dunklem Grund */
 :root[data-theme="dark"] input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1) brightness(1.4); }
 input[type=range] { width: 100%; accent-color: var(--c-primary); }

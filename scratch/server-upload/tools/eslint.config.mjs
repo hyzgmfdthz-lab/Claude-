@@ -20,6 +20,7 @@ const BROWSER = {
   TextEncoder: 'readonly', TextDecoder: 'readonly',
   HTMLInputElement: 'readonly', HTMLElement: 'readonly', HTMLSelectElement: 'readonly',
   HTMLTextAreaElement: 'readonly', SVGElement: 'readonly', File: 'readonly', FormData: 'readonly',
+  ResizeObserver: 'readonly',
 };
 
 const NODE = {

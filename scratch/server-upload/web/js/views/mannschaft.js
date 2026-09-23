@@ -483,7 +483,7 @@ async function ladeMannschaft(a, container) {
         label: op.name.split(' ')[0].slice(0, 9),
         render: (p) => {
           const stufe = Number(p.skills?.[op.id] ?? 0);
-          return h('select', {
+          return h('select.skill-select', {
             title: `${p.id}: ${op.name} – ${t.skillLevels?.[stufe] ?? stufe}`,
             onchange: (e) => speichern(a, t, p.id,
               (x) => { x.skills = { ...x.skills, [op.id]: Number(e.target.value) }; }),
