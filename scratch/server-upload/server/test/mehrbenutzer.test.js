@@ -392,6 +392,156 @@ test('Migration: verwaistes "ORBITAL" in den Belegungszeiten wird entfernt', () 
   assert.equal(byOperation.SAEGEN.operatingHours, 15, 'gültige Einträge bleiben unangetastet');
 });
 
+test('Migration: gespeicherte Arbeitspläne bekommen neu hinzugekommene Arbeitsgänge nachgetragen', () => {
+  /*
+   * Nutzermeldung 23.09.2026 ("Termintreue 95% das ist auch unrealistisch
+   * ... finde den Logikfehler"): `dataset.templates ??= ...` greift nur bei
+   * einem GANZ NEUEN Datenbestand - bei einem echten, lange genutzten bleibt
+   * der Arbeitsplan für immer auf dem Stand von damals stehen, egal wie oft
+   * die Standard-Arbeitsfolge im Code geändert wird. Belegt am echten
+   * Datenexport des Nutzers: ein "Neubau 40 ft"-Auftrag zeigte 147,6 h
+   * Gesamtstunden statt der dokumentierten 247,75 h - der gesamte Anteil von
+   * Arbeitsvorbereitung UND Orbitalschweißen fehlte im gespeicherten
+   * Arbeitsplan, weil beide erst nachträglich eingeführt wurden, nachdem
+   * der Datenbestand schon existierte.
+   */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'megc-migrate-arbeitsplan-'));
+  const store = openStore(dir, { forceFile: true });
+  // Nachbau des ECHTEN, alten Arbeitsplans - wie er vor Arbeitsvorbereitung
+  // und der Aufteilung von Orbitalschweißen gespeichert war.
+  const alteSteps = [
+    { opId: 'SAEGEN', hours: 18, predecessors: [], earliestStartWeeksBeforeDue: null, maxWorkers: null },
+    {
+      opId: 'ENTGRATEN', hours: 20.75, predecessors: [{ opId: 'SAEGEN', type: 'FS', leadHours: null }],
+      earliestStartWeeksBeforeDue: null, maxWorkers: null,
+    },
+    {
+      opId: 'BIEGEN', hours: 13, predecessors: [{ opId: 'ENTGRATEN', type: 'FS', leadHours: null }],
+      earliestStartWeeksBeforeDue: null, maxWorkers: null,
+    },
+    {
+      opId: 'HEFTEN', hours: 38.75, predecessors: [{ opId: 'BIEGEN', type: 'FS', leadHours: null }],
+      earliestStartWeeksBeforeDue: null, maxWorkers: null,
+    },
+    {
+      opId: 'ORBITAL', hours: 90.25, predecessors: [{ opId: 'HEFTEN', type: 'OVERLAP', leadHours: null }],
+      earliestStartWeeksBeforeDue: null, maxWorkers: null,
+    },
+    {
+      opId: 'BEIZEN', hours: 17.75, predecessors: [{ opId: 'ORBITAL', type: 'FS', leadHours: null }],
+      earliestStartWeeksBeforeDue: null, maxWorkers: null,
+    },
+    {
+      opId: 'VORMONTAGE', hours: 12.25, predecessors: [{ opId: 'BEIZEN', type: 'FS', leadHours: null }],
+      earliestStartWeeksBeforeDue: null, maxWorkers: null,
+    },
+    {
+      opId: 'HYDRO', hours: 17, predecessors: [{ opId: 'VORMONTAGE', type: 'FS', leadHours: null }],
+      earliestStartWeeksBeforeDue: null, maxWorkers: null,
+    },
+    {
+      opId: 'ENDKONTROLLE', hours: 20, predecessors: [{ opId: 'HYDRO', type: 'FS', leadHours: null }],
+      earliestStartWeeksBeforeDue: null, maxWorkers: null,
+    },
+  ];
+  const alteSumme = alteSteps.reduce((a, s) => a + s.hours, 0);
+
+  store.save({
+    meta: { version: 1, createdAt: new Date().toISOString() },
+    projects: [],
+    templates: {
+      NEUBAU_FT40: { key: 'NEUBAU_FT40', label: 'Neubau 40 ft', validated: true, note: '', steps: alteSteps },
+    },
+    scenarios: [{
+      id: 'BASELINE', name: 'Baseline', isBaseline: true, createdAt: new Date().toISOString(),
+      config: {}, projectOverrides: {}, sequenceOverride: null,
+    }],
+  }, 'Ausgangsstand');
+
+  const api = createApi(store);
+  const migriert = api.state().templates.NEUBAU_FT40;
+  const opIds = migriert.steps.map((s) => s.opId);
+
+  assert.ok(opIds.includes('AV'), 'Arbeitsvorbereitung muss nachgetragen werden');
+  assert.ok(opIds.includes('ORBITAL_KEHLNAHT') && opIds.includes('ORBITAL_STUMPFNAHT'),
+    'Orbitalschweißen muss in Kehlnaht/Stumpfnaht aufgeteilt werden');
+  assert.ok(!opIds.includes('ORBITAL'), 'der alte, ungeteilte Arbeitsgang darf nicht mehr vorkommen');
+  assert.ok(opIds.includes('HANDSCHWEISSEN') && opIds.includes('MOLCHEN'),
+    'Handschweißen und Molchen müssen nachgetragen werden');
+
+  // Die Orbital-Stunden dürfen sich in Summe NICHT ändern - nur aufteilen.
+  const kehlnaht = migriert.steps.find((s) => s.opId === 'ORBITAL_KEHLNAHT').hours;
+  const stumpfnaht = migriert.steps.find((s) => s.opId === 'ORBITAL_STUMPFNAHT').hours;
+  assert.ok(Math.abs(kehlnaht + stumpfnaht - 90.25) < 0.01,
+    `Kehlnaht + Stumpfnaht müssen zusammen 90,25 h ergeben, waren ${kehlnaht + stumpfnaht}`);
+
+  // Handschweißen/Molchen sind standardmäßig 0 h, Arbeitsvorbereitung hat
+  // echte Stunden - die neue Gesamtsumme darf nur um die AV-Stunden wachsen.
+  const neueSumme = migriert.steps.reduce((a, s) => a + Number(s.hours || 0), 0);
+  const av = migriert.steps.find((s) => s.opId === 'AV').hours;
+  assert.ok(Math.abs(neueSumme - alteSumme - av) < 0.01,
+    `Die neue Summe darf nur um die AV-Stunden wachsen (alt ${alteSumme}, neu ${neueSumme}, AV ${av})`);
+
+  // Beizen darf nicht mehr auf das nicht mehr existierende "ORBITAL" warten,
+  // sondern auf beide neuen Arbeitsgänge.
+  const beizenVorgaenger = migriert.steps.find((s) => s.opId === 'BEIZEN').predecessors.map((p) => p.opId);
+  assert.deepEqual(beizenVorgaenger.sort(), ['ORBITAL_KEHLNAHT', 'ORBITAL_STUMPFNAHT'].sort(),
+    'Beizen darf nicht auf einen Arbeitsgang warten, den es nicht mehr gibt');
+
+  // Sägen bekommt Arbeitsvorbereitung als neuen Vorgänger (vorher keiner).
+  const saegenVorgaenger = migriert.steps.find((s) => s.opId === 'SAEGEN').predecessors.map((p) => p.opId);
+  assert.deepEqual(saegenVorgaenger, ['AV'], 'Sägen muss jetzt auf Arbeitsvorbereitung warten');
+
+  // Bestehende, unveränderte Arbeitsgänge behalten ihre eigenen Stunden.
+  assert.equal(migriert.steps.find((s) => s.opId === 'HEFTEN').hours, 38.75);
+});
+
+test('Migration: ein Auftrag mit eigenem Eintrag für das alte "ORBITAL" wird mitmigriert', () => {
+  /*
+   * Zweite Hälfte desselben Fundes: die Datenprüfung des Nutzers selbst
+   * meldete "WGC40-S00355: Unbekannter Arbeitsgang 'ORBITAL'" - ein
+   * einzelner Auftrag hatte dort eine eigene Reststunden-/Fertigmeldung
+   * hinterlegt, die durch die reine Vorlagen-Migration nicht erreicht wird.
+   */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'megc-migrate-projekt-orbital-'));
+  const store = openStore(dir, { forceFile: true });
+  store.save({
+    meta: { version: 1, createdAt: new Date().toISOString() },
+    projects: [{
+      id: 'P1', orderNo: 'WGC40-S00355', customer: 'Test', name: '', projectType: 'NEUBAU',
+      variant: 'FT40', dueDate: '2026-11-01', handoverDate: null, priority: 'P1', sequence: 10,
+      sequenceLocked: false, progressMode: 'PER_OPERATION', progressPercent: 0,
+      operations: [{ opId: 'ORBITAL', plannedHours: 90.25, remainingHours: 0, status: 'FERTIG' }],
+      totalHoursOverride: null, materialAvailableFrom: null, missingParts: false, missingPartsNote: '',
+      missingPartsSince: null, earliestStart: null, done: false, formerIds: [], note: '', active: true,
+    }],
+    scenarios: [{
+      id: 'BASELINE', name: 'Baseline', isBaseline: true, createdAt: new Date().toISOString(),
+      config: {}, projectOverrides: {}, sequenceOverride: null,
+    }],
+  }, 'Ausgangsstand');
+
+  const api = createApi(store);
+  const projekt = api.state().projects.find((p) => p.orderNo === 'WGC40-S00355');
+  const opIds = projekt.operations.map((o) => o.opId);
+  assert.ok(!opIds.includes('ORBITAL'), 'der alte, ungeteilte Arbeitsgang darf nicht mehr vorkommen');
+  assert.ok(opIds.includes('ORBITAL_KEHLNAHT') && opIds.includes('ORBITAL_STUMPFNAHT'));
+
+  const kehlnaht = projekt.operations.find((o) => o.opId === 'ORBITAL_KEHLNAHT');
+  const stumpfnaht = projekt.operations.find((o) => o.opId === 'ORBITAL_STUMPFNAHT');
+  assert.ok(Math.abs(kehlnaht.plannedHours + stumpfnaht.plannedHours - 90.25) < 0.01);
+  // Die Fertigmeldung darf nicht verloren gehen - sonst müsste der Auftrag
+  // ein bereits fertiges Orbitalschweißen scheinbar nochmal machen.
+  assert.equal(kehlnaht.status, 'FERTIG', 'die Fertigmeldung muss erhalten bleiben');
+  assert.equal(stumpfnaht.status, 'FERTIG', 'die Fertigmeldung muss erhalten bleiben');
+  assert.equal(kehlnaht.remainingHours, 0);
+  assert.equal(stumpfnaht.remainingHours, 0);
+
+  const validation = api.validate('BASELINE');
+  assert.ok(!validation.issues.some((i) => i.code === 'ARBEITSGANG_UNBEKANNT'),
+    'die Datenprüfung darf "ORBITAL" nicht mehr als unbekannten Arbeitsgang melden');
+});
+
 test('Änderungsprotokoll: Mannschaftsänderung wird lesbar zusammengefasst', () => {
   /*
    * FIX (gefunden 21.09.2026 anhand eines Screenshots): eine Änderung an

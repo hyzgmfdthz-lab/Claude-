@@ -42,7 +42,7 @@ const AV_STUNDEN = 7.5;
  * der bisherigen Orbitalzeit entspricht (keine Rundungsdrift).
  * @param {number} total
  */
-function splitOrbital(total) {
+export function splitOrbital(total) {
   const kehlnaht = Math.round((total / 3) * 100) / 100;
   return { ORBITAL_KEHLNAHT: kehlnaht, ORBITAL_STUMPFNAHT: Math.round((total - kehlnaht) * 100) / 100 };
 }

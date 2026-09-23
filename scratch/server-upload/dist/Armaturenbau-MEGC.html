@@ -10387,7 +10387,7 @@ __defs["server/api.js"] = function (__exports, __req) {
  * Enthaelt keine HTTP-Details - dadurch automatisiert testbar.
  */
 
-const { analyze, materialize, duplicateScenario, resetScenario, getScenario, optimize, proposeSolutions, evaluate, summarize, kpiDelta, projectStatusDiff, whatHelps, requiredAdditionalStaff, createProject, makeId, deepClone, deepMerge, validate, validationSummary, seedDataset, defaultRoutingTemplates, defaultWorkplaces, defaultConfig, OPERATIONS, PROJECT_TYPES, VARIANTS, PRIORITIES, OPERATION_BY_ID, routingLabel, formatDE, parseDate, runSchedule, round2, defaultUsers, publicUser, normalizeUserId, hashPassword, verifyPassword, passwordProblem, createSession, tokenHashOf, SESSION_HOURS, ADMIN_USER, parseRuleText, checkRules, ruleSummary, hasError, emptyRule, RULE_TYPES, assignPeople, personWeek, defaultTeam, peopleOf, teamOn, ZUGESAGTE_LEIHE, planeSchichten, mitSchichten, SHIFTS, ABSENCE_KINDS, SKILL_LEVELS, weekList, parseAttendanceMatrix, absentPerDay, absentPerWeek, board, BOARD_MODE, wendeBestaetigungenAn, PLAUSI_LEVEL, wendeMassnahmeAn, mehraufwand: rechneMehraufwand, runSchedule: planeDurch, AV_ERLEDIGT_BIS, OP_STATUS } = __req("engine/index.js");
+const { analyze, materialize, duplicateScenario, resetScenario, getScenario, optimize, proposeSolutions, evaluate, summarize, kpiDelta, projectStatusDiff, whatHelps, requiredAdditionalStaff, createProject, makeId, deepClone, deepMerge, validate, validationSummary, seedDataset, defaultRoutingTemplates, defaultWorkplaces, defaultConfig, splitOrbital, OPERATIONS, PROJECT_TYPES, VARIANTS, PRIORITIES, OPERATION_BY_ID, routingLabel, formatDE, parseDate, runSchedule, round2, defaultUsers, publicUser, normalizeUserId, hashPassword, verifyPassword, passwordProblem, createSession, tokenHashOf, SESSION_HOURS, ADMIN_USER, parseRuleText, checkRules, ruleSummary, hasError, emptyRule, RULE_TYPES, assignPeople, personWeek, defaultTeam, peopleOf, teamOn, ZUGESAGTE_LEIHE, planeSchichten, mitSchichten, SHIFTS, ABSENCE_KINDS, SKILL_LEVELS, weekList, parseAttendanceMatrix, absentPerDay, absentPerWeek, board, BOARD_MODE, wendeBestaetigungenAn, PLAUSI_LEVEL, wendeMassnahmeAn, mehraufwand: rechneMehraufwand, runSchedule: planeDurch, AV_ERLEDIGT_BIS, OP_STATUS } = __req("engine/index.js");
 const { writeXlsx, readXlsx, writeCsv, readCsv } = __req("browser/xlsx.js");
 
 class ApiError extends Error {
@@ -12825,11 +12825,137 @@ function leerlaufSumme(plan) {
   return { personentage: summe, gruende, ohneNamen: plan.unassignedHours ?? 0 };
 }
 
+/**
+ * FIX (Nutzermeldung 23.09.2026, Termintreue sprang unerklärt auf 95 %):
+ * `dataset.templates ??= defaultRoutingTemplates()` greift nur, wenn noch
+ * GAR KEINE Arbeitsfolgen gespeichert sind - bei einem echten, lange
+ * genutzten Datenbestand sind sie es laengst, und bleiben dann fuer immer
+ * auf dem Stand von damals stehen. Jede Aenderung an der Arbeitsfolge in
+ * diesem Projekt (Arbeitsvorbereitung ergaenzt, Orbitalschweissen in
+ * Kehlnaht/Stumpfnaht aufgeteilt, Handschweissen/Molchen ergaenzt) erreicht
+ * dadurch NIE die echten, gespeicherten Arbeitsplaene - nur druckfrische
+ * Datenbestaende. Belegt am echten Datenexport des Nutzers: ein "Neubau 40
+ * ft"-Auftrag zeigte 147,6 h Gesamtstunden statt der dokumentierten 247,75 h
+ * - fehlend war genau der Anteil, den Orbitalschweissen (~90 h) und
+ * Arbeitsvorbereitung ausmachen. Die Rechnung war dadurch nicht falsch,
+ * sondern rechnete mit einem Arbeitsplan, der einen ganzen, oft den
+ * groessten Arbeitsgang gar nicht mehr kannte - daher die unrealistisch
+ * gute Termintreue.
+ *
+ * Diese Funktion ergaenzt bestehende, gespeicherte Arbeitsplaene um neu
+ * hinzugekommene Arbeitsgaenge, OHNE von der Abteilung selbst geaenderte
+ * Stunden an den ohnehin vorhandenen Schritten anzutasten.
+ */
+function migrateArbeitsplaene(dataset) {
+  const frisch = defaultRoutingTemplates();
+  for (const [key, neu] of Object.entries(frisch)) {
+    const alt = dataset.templates[key];
+    if (!alt || !Array.isArray(alt.steps)) continue;
+
+    /*
+     * 1) Das alte, ungeteilte "ORBITAL" (vor 23.09.2026) in Kehlnaht und
+     *    Stumpfnaht aufteilen - mit den TATSAECHLICH hinterlegten Stunden,
+     *    nicht dem Standardwert, falls die Abteilung sie selbst geaendert
+     *    hatte. splitOrbital() haelt die Summe exakt gleich.
+     */
+    const orbitalIndex = alt.steps.findIndex((s) => s.opId === 'ORBITAL');
+    const hatKehlnahtSchon = alt.steps.some((s) => s.opId === 'ORBITAL_KEHLNAHT');
+    if (orbitalIndex !== -1 && !hatKehlnahtSchon) {
+      const altSchritt = alt.steps[orbitalIndex];
+      const aufgeteilt = splitOrbital(Number(altSchritt.hours) || 0);
+      const kehlnahtVorlage = neu.steps.find((s) => s.opId === 'ORBITAL_KEHLNAHT');
+      const stumpfnahtVorlage = neu.steps.find((s) => s.opId === 'ORBITAL_STUMPFNAHT');
+      const ersatz = [];
+      if (kehlnahtVorlage) ersatz.push({ ...kehlnahtVorlage, hours: aufgeteilt.ORBITAL_KEHLNAHT });
+      if (stumpfnahtVorlage) ersatz.push({ ...stumpfnahtVorlage, hours: aufgeteilt.ORBITAL_STUMPFNAHT });
+      alt.steps.splice(orbitalIndex, 1, ...ersatz);
+      /*
+       * Jede andere Position, die noch auf das alte "ORBITAL" als Vorgaenger
+       * zeigt (z. B. Beizen), muss jetzt auf BEIDE neuen Positionen zeigen -
+       * sonst wartet sie auf einen Arbeitsgang, den es nicht mehr gibt.
+       */
+      for (const schritt of alt.steps) {
+        if (!Array.isArray(schritt.predecessors)) continue;
+        const idx = schritt.predecessors.findIndex((p) => p.opId === 'ORBITAL');
+        if (idx === -1) continue;
+        const alterEintrag = schritt.predecessors[idx];
+        schritt.predecessors.splice(idx, 1,
+          { ...alterEintrag, opId: 'ORBITAL_KEHLNAHT' },
+          { ...alterEintrag, opId: 'ORBITAL_STUMPFNAHT' });
+      }
+    }
+
+    /*
+     * 2) Fehlende neue Arbeitsgaenge (Arbeitsvorbereitung, Handschweissen,
+     *    Molchen) aus der aktuellen Standardvorlage ergaenzen - mit ihren
+     *    Standardstunden (Arbeitsvorbereitung hat reale Stunden,
+     *    Handschweissen/Molchen standardmaessig 0 h je Nutzervorgabe).
+     */
+    const vorhanden = new Set(alt.steps.map((s) => s.opId));
+    for (const schritt of neu.steps) {
+      if (vorhanden.has(schritt.opId)) continue;
+      // Direkt nach dem Arbeitsgang einfuegen, der laut aktueller Vorlage
+      // davor liegt - existiert der nicht (mehr) im alten Plan, ans Ende.
+      const vorgaengerOpId = schritt.predecessors?.[0]?.opId;
+      const vorgaengerIndex = alt.steps.findIndex((s) => s.opId === vorgaengerOpId);
+      const position = vorgaengerIndex !== -1 ? vorgaengerIndex + 1 : alt.steps.length;
+      const eingefuegt = { ...schritt };
+      alt.steps.splice(position, 0, eingefuegt);
+      vorhanden.add(schritt.opId);
+
+      /*
+       * Wer bisher OHNE Vorgaenger begann (der alte erste Schritt), bekommt
+       * den neu eingefuegten Arbeitsgang als Vorgaenger, wenn genau das
+       * laut aktueller Vorlage jetzt so vorgesehen ist (z. B. Arbeits-
+       * vorbereitung vor Saegen). Ohne das wuerde der neue Arbeitsgang zwar
+       * mitgezaehlt, aber nichts mehr auf ihn warten lassen.
+       */
+      for (const anderer of alt.steps) {
+        if (anderer === eingefuegt || anderer.predecessors?.length) continue;
+        const sollVorgaenger = neu.steps.find((n) => n.opId === anderer.opId)
+          ?.predecessors?.some((p) => p.opId === eingefuegt.opId);
+        if (sollVorgaenger) anderer.predecessors = [{ opId: eingefuegt.opId, type: 'FS', leadHours: null }];
+      }
+    }
+  }
+}
+
+/**
+ * Zweite Haelfte derselben Ursache wie migrateArbeitsplaene(): nicht nur
+ * die VORLAGE, auch einzelne AUFTRAEGE koennen einen eigenen Eintrag fuer
+ * das alte, ungeteilte "ORBITAL" hinterlegt haben (z. B. eine Fertigmeldung
+ * oder projektspezifische Reststunden). Belegt durch die Datenpruefung des
+ * Nutzers selbst: mehrere Auftraege meldeten den Befund
+ * ARBEITSGANG_UNBEKANNT("ORBITAL") - der Eintrag existierte, wurde aber
+ * von der Terminierung stillschweigend uebergangen, weil "ORBITAL" keine
+ * gueltige Arbeitsgang-Kennung mehr ist.
+ */
+function migrateProjektArbeitsgaenge(dataset) {
+  for (const p of dataset.projects ?? []) {
+    if (!Array.isArray(p.operations)) continue;
+    const idx = p.operations.findIndex((o) => o.opId === 'ORBITAL');
+    if (idx === -1 || p.operations.some((o) => o.opId === 'ORBITAL_KEHLNAHT')) continue;
+    const alt = p.operations[idx];
+    const kehlnaht = { ...alt, opId: 'ORBITAL_KEHLNAHT' };
+    const stumpfnaht = { ...alt, opId: 'ORBITAL_STUMPFNAHT' };
+    for (const feld of ['plannedHours', 'remainingHours']) {
+      const wert = Number(alt[feld]);
+      if (alt[feld] == null || alt[feld] === '' || !Number.isFinite(wert)) continue;
+      const aufgeteilt = splitOrbital(wert);
+      kehlnaht[feld] = aufgeteilt.ORBITAL_KEHLNAHT;
+      stumpfnaht[feld] = aufgeteilt.ORBITAL_STUMPFNAHT;
+    }
+    p.operations.splice(idx, 1, kehlnaht, stumpfnaht);
+  }
+}
+
 /** Ergaenzt fehlende Felder aelterer Datenstaende. */
 function migrate(dataset) {
   dataset.meta ??= { version: 1, createdAt: new Date().toISOString(), title: 'Armaturenbau MEGC' };
   dataset.projects ??= [];
   dataset.templates ??= defaultRoutingTemplates();
+  migrateArbeitsplaene(dataset);
+  migrateProjektArbeitsgaenge(dataset);
   dataset.workplaces ??= defaultWorkplaces();
   dataset.scenarios ??= [];
   if (!dataset.scenarios.some((s) => s.isBaseline)) {
@@ -15814,6 +15940,7 @@ function defaultConfig() {
   };
 }
 
+  __exports["splitOrbital"] = splitOrbital;
   __exports["defaultRoutingTemplates"] = defaultRoutingTemplates;
   __exports["defaultWorkplaces"] = defaultWorkplaces;
   __exports["defaultPlaces"] = defaultPlaces;
