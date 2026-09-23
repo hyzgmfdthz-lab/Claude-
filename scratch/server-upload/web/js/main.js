@@ -311,21 +311,39 @@ export const app = {
       h('div.content',
         this.catchUpData && catchUpPanel(this, this.catchUpData),
         body(this))));
+    if (this._scrollMo) { this._scrollMo.disconnect(); this._scrollMo = null; }
     const neuesContent = root.querySelector('.content');
     if (neuesContent && scrollPosition > 0) {
       neuesContent.scrollTop = scrollPosition;
       /*
-       * Viele Ansichten (z. B. Mannschaft) rendern zunaechst ein Geruest
-       * und laden ihren eigentlichen Inhalt NACHTRAEGLICH asynchron
-       * (eigenes container.replaceChildren, ausserhalb dieses render()).
-       * In diesem Moment ist .content oft noch zu kurz fuer die alte
-       * Scrollposition - sie wird auf 0 gekappt, bevor der Inhalt da ist.
-       * Ein ResizeObserver haelt die Position deshalb kurzzeitig nach, bis
-       * der Nachlade-Inhalt steht, und schaltet sich danach von selbst ab.
+       * Viele Ansichten (z. B. Mannschaft "Wer darf was?") rendern zunaechst
+       * ein Geruest und laden ihren eigentlichen Inhalt NACHTRAEGLICH
+       * asynchron (eigenes container.replaceChildren, ausserhalb dieses
+       * render()) - dort sogar aus ZWEI unabhaengig voneinander wartenden
+       * Ladevorgaengen (z. B. Mannschaft: "Wer wird gerechnet?" ist schnell
+       * fertig, "Wer darf was?" wartet zusaetzlich auf die neu gerechnete
+       * Einsatzplanung und kann deutlich laenger dauern). Jedes dieser
+       * replaceChildren() leert seinen Bereich kurz, bevor der neue Inhalt
+       * steht - der Browser kappt scrollTop in genau diesem Moment von
+       * selbst auf das, was gerade passt.
+       *
+       * FIX (Nutzermeldung 23.09.2026, "passiert immer noch bei Wer darf
+       * was?"): zwei fruehere Ansaetze (feste Wartezeit; Abschalten sobald
+       * .content "hoch genug" ist oder eine Weile keine Aenderung mehr kam)
+       * scheiterten jeweils daran, dass sich der Beobachter abschaltete,
+       * bevor der LANGSAMERE der beiden Ladevorgaenge ueberhaupt fertig
+       * war. Ein MutationObserver stellt deshalb bei JEDER tatsaechlichen
+       * DOM-Aenderung innerhalb von .content scrollTop neu her und bleibt
+       * bis zum naechsten render() aktiv (oben wird der vorherige
+       * Beobachter dafuer immer zuerst abgeschaltet) - keine Zeit- oder
+       * Groessen-Heuristik, die zu frueh aufgeben kann. Eine grosse
+       * Sicherheitsschranke faengt nur den Fall ab, dass render() aus
+       * irgendeinem Grund nie wieder aufgerufen wird.
        */
-      const ro = new ResizeObserver(() => { neuesContent.scrollTop = scrollPosition; });
-      ro.observe(neuesContent);
-      setTimeout(() => ro.disconnect(), 1500);
+      const mo = new MutationObserver(() => { neuesContent.scrollTop = scrollPosition; });
+      mo.observe(neuesContent, { childList: true, subtree: true });
+      this._scrollMo = mo;
+      setTimeout(() => { if (this._scrollMo === mo) { mo.disconnect(); this._scrollMo = null; } }, 30000);
     }
     // Ein offenes Stellschrauben-Panel bleibt offen und zeigt die neuen Werte
     if (this.ui.panel === 'stellschrauben') openStellschrauben(this);
