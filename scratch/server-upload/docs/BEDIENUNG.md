@@ -116,6 +116,19 @@ Verspätungstage; die Personentage ohne Arbeit gehen von 1.007 auf 399 zurück.
 Die Mannschaft wechselt die Schicht dabei **wochenweise**, nicht tageweise –
 nachzusehen im Einsatzplan unter Mannschaft.
 
+**Personalbedarf für ein Termintreue-Ziel:** Übersicht → Antwortzeile, Zeile
+„Für 100 % Termintreue: +X Mitarbeiter …". Der Knopf **„Auch für > 90 %
+Termintreue anzeigen"** rechnet auf Abruf, wie viele Mitarbeiter für eine
+Termintreue über 90 % statt für ausnahmslos alle Termine nötig sind –
+meistens weniger. Beide Zahlen rechnen ausschließlich mit der echten
+Mannschaftsliste (Vorgabe: „Personal kommt ausschließlich über die
+Mannschaft in die Rechnung"), nicht mit einem hypothetischen Schichtmodell.
+Genau das war früher die Meldung „Schichtbetrieb nicht besetzbar" in den
+Auffälligkeiten – sie stand fälschlich als kritisch da, weil sie mit einer
+Annahme rechnete („liefen alle betroffenen Arbeitsgänge gleichzeitig mit
+dieser Belegungszeit"), nicht mit dem, was tatsächlich eingeplant wird. Sie
+ist jetzt ein Hinweis und verweist auf diesen Knopf.
+
 **Wenn nur einer da wäre:** Aus Arbeitsschutz arbeitet niemand allein. Ein
 Tag, an dem laut Anwesenheit nur eine Person zur Verfügung steht, wird mit
 **0 h** gerechnet – nicht mit einer halben Mannschaft. Gezählt werden Köpfe,

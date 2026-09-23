@@ -689,6 +689,13 @@ function qualifikationsLine(a) {
     h('span.faint', ' (gerechnet über die Wochen, in denen Arbeit liegenblieb)'));
 }
 
+function knopf90(a) {
+  return h('button.btn.btn--sm', {
+    style: { marginLeft: '6px' },
+    onclick: (e) => zeigePersonalbedarf90(a, e.target),
+  }, 'Auch für > 90 % Termintreue anzeigen');
+}
+
 async function loadStaff(a, target) {
   try {
     const r = await api.requiredStaff(a.scenarioId);
@@ -697,17 +704,59 @@ async function loadStaff(a, target) {
       return;
     }
     if (!r.solved) {
+      /*
+       * Auch wenn 100 % Termintreue allein durch Personal nicht erreichbar
+       * ist (ein anderer Engpass wie eine Maschine begrenzt), kann ein
+       * niedrigeres, realistischeres Ziel (> 90 %) trotzdem mit Personal
+       * erreichbar sein - der Knopf bleibt deshalb auch hier stehen.
+       */
       target.replaceChildren(h('span',
         h('strong', 'Achtung: '),
         `Mehr Personal allein löst es nicht – auch mit ${r.triedStaff} zusätzlichen Mitarbeitern bleiben Termine offen. `,
-        `Begrenzend ist dann: ${r.bottleneck}. ${adviceFor(r.bottleneckCause)}`));
+        `Begrenzend ist dann: ${r.bottleneck}. ${adviceFor(r.bottleneckCause)}`,
+        ' ', knopf90(a)));
       return;
     }
     target.replaceChildren(h('span',
       h('strong', 'Für 100 % Termintreue: '),
-      `+${r.needed} Mitarbeiter ab ${fmt.week(r.fromWeek)} (${fmt.date(r.fromDate)}).`));
+      `+${r.needed} Mitarbeiter ab ${fmt.week(r.fromWeek)} (${fmt.date(r.fromDate)}). `,
+      knopf90(a)));
   } catch {
     target.replaceChildren(h('span.faint', 'Personalbedarf konnte nicht berechnet werden.'));
+  }
+}
+
+/**
+ * Personalbedarf für ein niedrigeres Termintreue-Ziel (> 90 %) - auf Abruf.
+ *
+ * Nutzervorgabe (23.09.2026): statt einer pauschalen Meldung "Schichtbetrieb
+ * nicht besetzbar" (die mit einem hypothetischen Schichtmodell rechnete,
+ * nicht mit der echten Mannschaft) ein Hinweis, der an das eigentliche Ziel
+ * anknüpft. Rechnet wie "Für 100 % Termintreue" ausschließlich über die
+ * echte Mannschaftsliste (`requiredAdditionalStaff`, jetzt mit `zielOtd`) -
+ * auf Abruf, weil jede Stufe eine volle Durchrechnung ist.
+ * @param {any} a @param {HTMLElement} knopf
+ */
+async function zeigePersonalbedarf90(a, knopf) {
+  const zeile = knopf.closest('.answer__sub') ?? knopf.parentElement;
+  knopf.disabled = true;
+  knopf.textContent = 'rechnet …';
+  try {
+    const r = await api.requiredStaff(a.scenarioId, 90);
+    const text = r.needed === 0
+      ? h('span', h('strong', ' Für > 90 % Termintreue: '), 'die vorhandene Mannschaft reicht bereits.')
+      : !r.solved
+        ? h('span', h('strong', ' Für > 90 % Termintreue: '),
+          `auch mit ${r.triedStaff} zusätzlichen Mitarbeitern nicht erreichbar – begrenzend ist `
+          + `${r.bottleneck}.`)
+        : h('span', h('strong', ' Für > 90 % Termintreue: '),
+          `+${r.needed} Mitarbeiter ab ${fmt.week(r.fromWeek)} (${fmt.date(r.fromDate)}).`);
+    zeile.append(h('div.small', { style: { marginTop: '4px' } }, text));
+    knopf.remove();
+  } catch (err) {
+    knopf.disabled = false;
+    knopf.textContent = 'Auch für > 90 % Termintreue anzeigen';
+    toast(err?.message ?? 'Der Personalbedarf für 90 % Termintreue konnte nicht berechnet werden.', 'error');
   }
 }
 

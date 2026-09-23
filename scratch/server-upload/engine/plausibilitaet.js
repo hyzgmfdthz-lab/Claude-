@@ -18,6 +18,7 @@
 import { round1, round2, OPERATION_BY_ID } from './model.js';
 import { formatDE, cmpDate, weekKey, addDays, weekday } from './calendar.js';
 import { peopleOf, teamOn, shiftCapability, weekActive, SHIFTS } from './team.js';
+import { placesFor } from './capacity.js';
 
 /** Dringlichkeit eines Befundes. */
 export const PLAUSI_LEVEL = {
@@ -452,20 +453,69 @@ function schichten(config, add) {
     return `versetzte Besetzung ${round1(Number(stunden))} h`;
   };
 
-  /** Zusaetzlich noetige Anwesenheit ueber die Regelschicht hinaus. */
+  /*
+   * FIX (Nutzermeldung 23.09.2026, "22 MA fehlen ... es muss nicht
+   * zwingend jeder Arbeitsgang immer 2-schichtig laufen"):
+   *
+   * Zwei Rechenfehler haben die Kopfzahl aufgeblaeht:
+   *
+   *  1. `w?.places` griff nur, wenn ein Arbeitsgang einen EIGENEN Eintrag
+   *     mit diesem Feld hat. Heften, Kehlnaht- und Stumpfnaht-Orbital
+   *     sowie Molchen haben aber gar keinen eigenen Platzeintrag (ihre
+   *     Kapazitaet steckt in eigenen Feldern wie
+   *     `heftPlaces`/`orbitalMachinesActive`, siehe capacity.js) - sie
+   *     fielen hier still auf den Standardwert 1 zurueck, unabhaengig von
+   *     der wirklichen Platzzahl. `placesFor()` kennt diese Herkunft
+   *     bereits (dieselbe Funktion, die auch den echten Einsatzplan
+   *     speist) und wird deshalb jetzt als Rueckfallebene genutzt.
+   *  2. Kehlnaht und Stumpfnaht Orbital teilen sich denselben
+   *     Maschinen-/Schweisser-Pool (capacityGroup 'ORBITAL', siehe
+   *     wochenSchichten() in schichtplan.js) - wurden hier aber als zwei
+   *     VOELLIG UNABHAENGIGE Arbeitsgaenge gezaehlt und ihr Bedarf addiert,
+   *     obwohl derselbe Schweisser beide bedient. Ausserdem bedient ein
+   *     Schweisser mehrere Maschinen (machinesPerWelder) - eine Maschine
+   *     ist nicht ein Kopf.
+   *
+   * `workersPerPlace()` aus capacity.js wird hier bewusst NICHT verwendet:
+   * sie behandelt Heften als Sonderfall und liest dafuer immer das globale
+   * Feld `workersPerHeftPlace`, unabhaengig von einem lokalen
+   * `byOperation.HEFTEN.workersPerPlace` - fuer diese Meldung zaehlt aber,
+   * was fuer DIESEN Schichtvorschlag eingestellt wurde.
+   */
+  const koepfeJeSchichtFuerMeldung = (opId, w) => {
+    if (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') {
+      const plaetze = placesFor(config, opId);
+      if (plaetze == null) return 1;
+      const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));
+      return Math.max(1, Math.floor(Number(plaetze) / jeSchweisser));
+    }
+    const plaetze = Math.max(1, Number(w?.places ?? placesFor(config, opId) ?? 1));
+    const jePlatz = Math.max(1, Number(w?.workersPerPlace ?? 1));
+    return plaetze * jePlatz;
+  };
+
   let zusatzKoepfe = 0;
   const mitEigenem = [];
   const ueberAllgemein = [];
+  /** @type {Map<string, {f:number, opId:string, w:any}>} */
+  const gruppenMitHoechstemFaktor = new Map();
   for (const [opId, w] of Object.entries(eigene)) {
     const eigenerWert = w?.operatingHours != null && w.operatingHours !== '';
     const stunden = eigenerWert ? Number(w.operatingHours) : allgemein;
     const f = faktor(stunden);
     if (f <= 1.05) continue;
-    const plaetze = Math.max(1, Number(w?.places ?? 1));
-    const jePlatz = Math.max(1, Number(w?.workersPerPlace ?? 1));
-    zusatzKoepfe += (f - 1) * plaetze * jePlatz;
     const name = OPERATION_BY_ID[opId]?.name ?? opId;
     (eigenerWert ? mitEigenem : ueberAllgemein).push(`${name} (${modell(stunden)})`);
+    const gruppe = OPERATION_BY_ID[opId]?.capacityGroup;
+    if (gruppe) {
+      const bisher = gruppenMitHoechstemFaktor.get(gruppe);
+      if (!bisher || f > bisher.f) gruppenMitHoechstemFaktor.set(gruppe, { f, opId, w });
+      continue;
+    }
+    zusatzKoepfe += (f - 1) * koepfeJeSchichtFuerMeldung(opId, w);
+  }
+  for (const { f, opId, w } of gruppenMitHoechstemFaktor.values()) {
+    zusatzKoepfe += (f - 1) * koepfeJeSchichtFuerMeldung(opId, w);
   }
   zusatzKoepfe = Math.ceil(zusatzKoepfe);
   if (zusatzKoepfe <= 0) return;
@@ -499,13 +549,30 @@ function schichten(config, add) {
   const faehig = shiftCapability(config);
   const koepfe = Number(faehig.capable ?? 0);
   if (koepfe < zusatzKoepfe) {
-    add(PLAUSI_LEVEL.KRITISCH, 'SCHICHT_NICHT_BESETZBAR', PLAUSI_AREA.BESETZUNG,
-      'Der eingestellte Schichtbetrieb ist nicht besetzbar',
-      `Die längere Belegungszeit verlangt ${zusatzKoepfe} Personen zusätzlich außerhalb der `
-      + `Regelschicht. Schichtfähig sind ${koepfe}. Betroffen: ${herkunft.join(' · ')}.`,
-      { hint: `${wo} Ohne Schicht fahren laut Auskunft: `
-        + `${(faehig.blockedIds ?? []).join(', ') || '–'}. Entweder die Belegungszeit zurücknehmen `
-        + 'oder schichtfähige Leute dazu holen.',
+    /*
+     * FIX (Nutzervorgabe 23.09.2026, Screenshot "22 Personen zusätzlich...
+     * Schichtfähig sind 11"): Diese Meldung stand bisher als KRITISCH und
+     * "nicht besetzbar" da, obwohl sie mit einem rein HYPOTHETISCHEN
+     * Schichtmodell rechnet (alle Arbeitsgänge mit der hier eingestellten
+     * Belegungszeit, gleichzeitig) - nicht mit dem, was die Terminierung
+     * tatsächlich einplant. Die Terminierung rechnet ohnehin ausschließlich
+     * mit der echten Mannschaftsliste (Vorgabe 17.09.2026); diese Zahl ist
+     * also keine Sperre, sondern nur ein Hinweis, dass dieses konkrete
+     * Schichtmodell voll ausgereizt mehr Leute bräuchte, als schichtfähig
+     * sind. Wie viele Mitarbeiter für ein echtes Ziel (z. B. Termintreue
+     * über 90 %) tatsächlich fehlen, beantwortet "Personalbedarf" unter
+     * Übersicht - auf Abruf, mit der echten Mannschaft gerechnet.
+     */
+    add(PLAUSI_LEVEL.HINWEIS, 'SCHICHT_NICHT_BESETZBAR', PLAUSI_AREA.BESETZUNG,
+      'Dieses Schichtmodell würde mehr schichtfähige Leute brauchen, als da sind',
+      `Liefen alle betroffenen Arbeitsgänge gleichzeitig mit dieser Belegungszeit, bräuchte das `
+      + `${zusatzKoepfe} Personen zusätzlich außerhalb der Regelschicht; schichtfähig sind ${koepfe}. `
+      + `Betroffen: ${herkunft.join(' · ')}. Das ist keine Sperre – die Terminierung rechnet ohnehin `
+      + 'nur mit der echten Mannschaft, nicht mit diesem Modell.',
+      { hint: `${wo} Wie viele Mitarbeiter für eine bestimmte Termintreue tatsächlich fehlen, zeigt `
+        + '"Übersicht" → "Personalbedarf" (rechnet auf Abruf mit der echten Mannschaft statt einem '
+        + `Schichtmodell). Ohne Schicht fahren laut Auskunft: `
+        + `${(faehig.blockedIds ?? []).join(', ') || '–'}.`,
         value: { gebraucht: zusatzKoepfe, faehig: koepfe } });
   } else if (koepfe < zusatzKoepfe * 2) {
     add(PLAUSI_LEVEL.HINWEIS, 'SCHICHT_KNAPP', PLAUSI_AREA.BESETZUNG,

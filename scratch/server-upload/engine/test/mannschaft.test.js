@@ -708,6 +708,57 @@ test('Aushilfe: kein Helfer, wenn die Terminierung keine Aushilfe eingepreist ha
   assert.equal(idle.grund, 'KEINE_QUALIFIKATION');
 });
 
+test('Aushilfe respektiert die unter Mannschaft/Schichtplanung gesetzte Schicht', () => {
+  /*
+   * Nutzervorgabe (23.09.2026): "Unter Mannschaft angegebene Schichten für
+   * den jeweiligen Mitarbeiter sind maßgeblich für die Einteilung auf die
+   * Arbeitsplätze." Der reguläre Zuteilungsweg hat das schon beachtet
+   * (`schichtVon[p.id] === sn`), der Aushilfe-Notweg nicht: Eine sonst
+   * untätige Person wurde als Helfer eingesetzt, ohne zu prüfen, ob ihre
+   * Schicht überhaupt zu der des Arbeitsganges passt. MAAP steht laut
+   * Schichtplanung in Schicht 2, ENTGRATEN läuft hier aber nur
+   * einschichtig (Schicht 1) - beide treffen sich zeitlich nie, MAAP darf
+   * also nicht als Helferin dort landen.
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 2,
+      team: {
+        source: 'MANNSCHAFT', enforceSkills: true,
+        people: [
+          helferPerson('A', { ENTGRATEN: true }),
+          { ...helferPerson('MAAP', {}), shiftWeeks: { '2026-W39': 2 } },
+        ],
+      },
+    },
+    resources: {
+      byOperation: {
+        ENTGRATEN: {
+          places: 1, workersPerPlace: 1,
+          aushilfe: {
+            max: 1, leistung: 0.5, stundenfaktor: 2, label: 'von Hand entgraten', text: 't',
+          },
+        },
+      },
+    },
+  });
+  const date = '2026-09-21';
+  const result = {
+    config, projects: [], blocked: [],
+    daySeries: [{
+      date, kind: 'REGULAR', weekKey: '2026-W39', hoursPerEmployee: 7.5, productivity: 1,
+      byOp: { ENTGRATEN: { aushilfeManHours: 7.5 } },
+    }],
+    allocations: [{ date, projectId: 'P1', opId: 'ENTGRATEN', manHours: 15 }],
+  };
+
+  const plan = assignPeople(result, config, {});
+  const tag = plan.days.find((d) => d.date === date);
+  const maap = tag.entries.find((e) => e.personId === 'MAAP');
+  assert.equal(maap, undefined,
+    'MAAP steht in Schicht 2, Entgraten läuft nur in Schicht 1 - keine Aushilfe-Zuteilung erlaubt');
+});
+
 /* ------------------------------------------------------------------ *
  * Luecken-Report (Nutzeranforderung 25.09.2026)
  * ------------------------------------------------------------------ */

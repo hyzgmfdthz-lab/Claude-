@@ -3964,6 +3964,13 @@ function qualifikationsLine(a) {
     h('span.faint', ' (gerechnet über die Wochen, in denen Arbeit liegenblieb)'));
 }
 
+function knopf90(a) {
+  return h('button.btn.btn--sm', {
+    style: { marginLeft: '6px' },
+    onclick: (e) => zeigePersonalbedarf90(a, e.target),
+  }, 'Auch für > 90 % Termintreue anzeigen');
+}
+
 async function loadStaff(a, target) {
   try {
     const r = await api.requiredStaff(a.scenarioId);
@@ -3972,17 +3979,59 @@ async function loadStaff(a, target) {
       return;
     }
     if (!r.solved) {
+      /*
+       * Auch wenn 100 % Termintreue allein durch Personal nicht erreichbar
+       * ist (ein anderer Engpass wie eine Maschine begrenzt), kann ein
+       * niedrigeres, realistischeres Ziel (> 90 %) trotzdem mit Personal
+       * erreichbar sein - der Knopf bleibt deshalb auch hier stehen.
+       */
       target.replaceChildren(h('span',
         h('strong', 'Achtung: '),
         `Mehr Personal allein löst es nicht – auch mit ${r.triedStaff} zusätzlichen Mitarbeitern bleiben Termine offen. `,
-        `Begrenzend ist dann: ${r.bottleneck}. ${adviceFor(r.bottleneckCause)}`));
+        `Begrenzend ist dann: ${r.bottleneck}. ${adviceFor(r.bottleneckCause)}`,
+        ' ', knopf90(a)));
       return;
     }
     target.replaceChildren(h('span',
       h('strong', 'Für 100 % Termintreue: '),
-      `+${r.needed} Mitarbeiter ab ${fmt.week(r.fromWeek)} (${fmt.date(r.fromDate)}).`));
+      `+${r.needed} Mitarbeiter ab ${fmt.week(r.fromWeek)} (${fmt.date(r.fromDate)}). `,
+      knopf90(a)));
   } catch {
     target.replaceChildren(h('span.faint', 'Personalbedarf konnte nicht berechnet werden.'));
+  }
+}
+
+/**
+ * Personalbedarf für ein niedrigeres Termintreue-Ziel (> 90 %) - auf Abruf.
+ *
+ * Nutzervorgabe (23.09.2026): statt einer pauschalen Meldung "Schichtbetrieb
+ * nicht besetzbar" (die mit einem hypothetischen Schichtmodell rechnete,
+ * nicht mit der echten Mannschaft) ein Hinweis, der an das eigentliche Ziel
+ * anknüpft. Rechnet wie "Für 100 % Termintreue" ausschließlich über die
+ * echte Mannschaftsliste (`requiredAdditionalStaff`, jetzt mit `zielOtd`) -
+ * auf Abruf, weil jede Stufe eine volle Durchrechnung ist.
+ * @param {any} a @param {HTMLElement} knopf
+ */
+async function zeigePersonalbedarf90(a, knopf) {
+  const zeile = knopf.closest('.answer__sub') ?? knopf.parentElement;
+  knopf.disabled = true;
+  knopf.textContent = 'rechnet …';
+  try {
+    const r = await api.requiredStaff(a.scenarioId, 90);
+    const text = r.needed === 0
+      ? h('span', h('strong', ' Für > 90 % Termintreue: '), 'die vorhandene Mannschaft reicht bereits.')
+      : !r.solved
+        ? h('span', h('strong', ' Für > 90 % Termintreue: '),
+          `auch mit ${r.triedStaff} zusätzlichen Mitarbeitern nicht erreichbar – begrenzend ist `
+          + `${r.bottleneck}.`)
+        : h('span', h('strong', ' Für > 90 % Termintreue: '),
+          `+${r.needed} Mitarbeiter ab ${fmt.week(r.fromWeek)} (${fmt.date(r.fromDate)}).`);
+    zeile.append(h('div.small', { style: { marginTop: '4px' } }, text));
+    knopf.remove();
+  } catch (err) {
+    knopf.disabled = false;
+    knopf.textContent = 'Auch für > 90 % Termintreue anzeigen';
+    toast(err?.message ?? 'Der Personalbedarf für 90 % Termintreue konnte nicht berechnet werden.', 'error');
   }
 }
 
@@ -12775,6 +12824,23 @@ function migrate(dataset) {
         if (!bekannteArbeitsgaenge.has(key)) delete p.skills[key];
       }
     }
+    /*
+     * FIX (Nutzermeldung 23.09.2026, Screenshot "Betroffen: ... ORBITAL (2
+     * Schichten)"): Derselbe verwaiste Schluessel wie bei den Skills, nur
+     * hier bei den Belegungszeiten/Plaetzen je Arbeitsgang
+     * (`resources.byOperation`). Ein Schichtvorschlag, der VOR der
+     * Aufteilung angenommen wurde, hat dort "ORBITAL" mit einer eigenen
+     * `operatingHours` hinterlegt. Dieser Schluessel gehoert zu keinem
+     * Arbeitsgang mehr, tauchte in Meldungen nur noch als roher Text
+     * "ORBITAL" auf (weil kein Name mehr dazu existiert) und wurde in der
+     * Schicht-Plausibilitaet als eigener, ungeteilter Arbeitsgang
+     * mitgezaehlt - zusaetzlich zu Kehlnaht und Stumpfnaht, mit dem
+     * falschen Rechenweg (eine Maschine = ein Kopf, statt einen
+     * Schweisser je zwei Maschinen).
+     */
+    for (const key of Object.keys(s.config.resources?.byOperation ?? {})) {
+      if (!bekannteArbeitsgaenge.has(key)) delete s.config.resources.byOperation[key];
+    }
   }
   // Gearbeitet wird auf einem eigenen Stand, damit Aenderungen sofort wirken
   // koennen, ohne die Baseline als Referenz zu verlieren.
@@ -20853,8 +20919,8 @@ function optimize(input, options = {}) {
 }
 
 /**
- * Wie viele zusaetzliche Mitarbeiter sind ab wann noetig, damit alle Termine
- * gehalten werden?
+ * Wie viele zusaetzliche Mitarbeiter sind ab wann noetig, damit ein
+ * Termintreue-Ziel gehalten wird?
  *
  * Beantwortet die Leitungsfrage "wofuer brauche ich mehr Personal und ab wann".
  * Verfahren: binaere Suche ueber die Anzahl zusaetzlicher Kraefte, jede Stufe
@@ -20862,16 +20928,31 @@ function optimize(input, options = {}) {
  * eingesetzt und wirken sofort mit voller Leistung (keine Einarbeitungskurve),
  * damit die Zahl den reinen Kapazitaetsbedarf ausdrueckt.
  *
+ * `zielOtd` (Nutzervorgabe 23.09.2026, ersetzt die bisherige Meldung
+ * "Schichtbetrieb nicht besetzbar" - die mit einem hypothetischen
+ * Schichtmodell statt der echten Mannschaft rechnete): Standardmaessig 100
+ * (alle Termine, wie bisher) - laesst sich aber auf einen Prozentwert wie
+ * 90 senken, um "wie viele Leute für eine Termintreue > 90 %" zu
+ * beantworten, statt nur "für ausnahmslos alle Termine".
+ *
  * @param {{config:any, projects:any[], templates:Record<string,any>}} input
- * @param {{maxStaff?:number, fromWeek?:string}} [options]
+ * @param {{maxStaff?:number, fromWeek?:string, zielOtd?:number}} [options]
  */
 function requiredAdditionalStaff(input, options = {}) {
   const maxStaff = options.maxStaff ?? 24;
+  const zielOtd = Number(options.zielOtd ?? 100);
+  // Bei 100 % bleibt exakt die bisherige Bedingung (late === 0) - otd >= 100
+  // koennte durch Rundung minimal abweichen und waere keine Nullmassnahme.
+  const erreicht = (kpis) => (zielOtd >= 100 ? kpis.late === 0 : kpis.otd >= zielOtd);
+
   const baseEval = evaluate(input);
   const base = summarize(baseEval.kpis);
 
-  if (base.late === 0) {
-    return { needed: 0, solved: true, fromWeek: null, fromDate: null, base, after: base, evaluations: 1, bottleneck: null };
+  if (erreicht(baseEval.kpis)) {
+    return {
+      needed: 0, solved: true, fromWeek: null, fromDate: null, base, after: base,
+      evaluations: 1, bottleneck: null, zielOtd,
+    };
   }
 
   const weekKeyStart = options.fromWeek ?? baseEval.kpis.firstOverloadWeek ?? weekKey(input.config.planningDate);
@@ -20899,13 +20980,14 @@ function requiredAdditionalStaff(input, options = {}) {
   let evaluations = 1;
   const top = evaluate({ ...input, config: withStaff(maxStaff) });
   evaluations++;
-  if (top.kpis.late > 0) {
+  if (!erreicht(top.kpis)) {
     return {
       needed: null, solved: false, fromWeek: weekKeyStart, fromDate,
-      base, after: summarize(top.kpis), triedStaff: maxStaff, evaluations,
+      base, after: summarize(top.kpis), triedStaff: maxStaff, evaluations, zielOtd,
       bottleneck: top.kpis.bottleneck?.label ?? null,
       bottleneckCause: top.kpis.bottleneck?.cause ?? null,
-      note: `Auch mit ${maxStaff} zusätzlichen Mitarbeitern werden nicht alle Termine gehalten. `
+      note: `Auch mit ${maxStaff} zusätzlichen Mitarbeitern wird das Ziel `
+        + `${zielOtd >= 100 ? '(alle Termine)' : `(Termintreue über ${zielOtd} %)`} nicht erreicht. `
         + `Begrenzend ist dann: ${top.kpis.bottleneck?.label ?? 'unbekannt'}.`,
     };
   }
@@ -20917,7 +20999,7 @@ function requiredAdditionalStaff(input, options = {}) {
     const mid = Math.floor((low + high) / 2);
     const ev = evaluate({ ...input, config: withStaff(mid) });
     evaluations++;
-    if (ev.kpis.late === 0) { high = mid; bestEval = ev; } else { low = mid + 1; }
+    if (erreicht(ev.kpis)) { high = mid; bestEval = ev; } else { low = mid + 1; }
   }
 
   return {
@@ -20928,6 +21010,7 @@ function requiredAdditionalStaff(input, options = {}) {
     base,
     after: summarize(bestEval.kpis),
     evaluations,
+    zielOtd,
     bottleneck: baseEval.kpis.bottleneck?.label ?? null,
     bottleneckCause: baseEval.kpis.bottleneck?.cause ?? null,
   };
@@ -23302,7 +23385,20 @@ function assignPeople(result, config, range = {}) {
          */
         const versucheAushilfe = () => {
           if (hilfeRestHeute <= 0.01 || restStunden <= 0.01) return false;
-          const frei = anwesend.filter((p) => !heuteAn[p.id]?.length && (rest[p.id] ?? 0) > 0.01);
+          /*
+           * FIX (Nutzervorgabe 23.09.2026, "die unter Mannschaft angegebene
+           * Schicht ist maßgeblich für die Einteilung auf die
+           * Arbeitsplätze"): Der reguläre Weg oben prüft schon, dass eine
+           * Person nur in IHRER Schicht eingeteilt wird
+           * (`(schichtVon[p.id] ?? 1) === sn`). Dieser Aushilfe-Zweig hat
+           * das nicht getan - eine fuer Schicht 2 eingeteilte Person konnte
+           * so als Helfer an einem Arbeitsgang landen, der nur in Schicht 1
+           * laeuft (oder umgekehrt), obwohl beide zeitlich gar nicht
+           * zusammentreffen. Die Person muss also in einer Schicht stehen,
+           * in der dieser Arbeitsgang ueberhaupt laeuft.
+           */
+          const frei = anwesend.filter((p) => !heuteAn[p.id]?.length && (rest[p.id] ?? 0) > 0.01
+            && (schichtVon[p.id] ?? 1) <= opSchichten);
           if (frei.length === 0) return false;
           frei.sort((x, y) => {
             const lx = byPerson[x.id].hours / Math.max(0.1, byPerson[x.id].factor);
@@ -23669,6 +23765,7 @@ __defs["engine/plausibilitaet.js"] = function (__exports, __req) {
 const { round1, round2, OPERATION_BY_ID } = __req("engine/model.js");
 const { formatDE, cmpDate, weekKey, addDays, weekday } = __req("engine/calendar.js");
 const { peopleOf, teamOn, shiftCapability, weekActive, SHIFTS } = __req("engine/team.js");
+const { placesFor } = __req("engine/capacity.js");
 
 /** Dringlichkeit eines Befundes. */
 const PLAUSI_LEVEL = {
@@ -24103,20 +24200,69 @@ function schichten(config, add) {
     return `versetzte Besetzung ${round1(Number(stunden))} h`;
   };
 
-  /** Zusaetzlich noetige Anwesenheit ueber die Regelschicht hinaus. */
+  /*
+   * FIX (Nutzermeldung 23.09.2026, "22 MA fehlen ... es muss nicht
+   * zwingend jeder Arbeitsgang immer 2-schichtig laufen"):
+   *
+   * Zwei Rechenfehler haben die Kopfzahl aufgeblaeht:
+   *
+   *  1. `w?.places` griff nur, wenn ein Arbeitsgang einen EIGENEN Eintrag
+   *     mit diesem Feld hat. Heften, Kehlnaht- und Stumpfnaht-Orbital
+   *     sowie Molchen haben aber gar keinen eigenen Platzeintrag (ihre
+   *     Kapazitaet steckt in eigenen Feldern wie
+   *     `heftPlaces`/`orbitalMachinesActive`, siehe capacity.js) - sie
+   *     fielen hier still auf den Standardwert 1 zurueck, unabhaengig von
+   *     der wirklichen Platzzahl. `placesFor()` kennt diese Herkunft
+   *     bereits (dieselbe Funktion, die auch den echten Einsatzplan
+   *     speist) und wird deshalb jetzt als Rueckfallebene genutzt.
+   *  2. Kehlnaht und Stumpfnaht Orbital teilen sich denselben
+   *     Maschinen-/Schweisser-Pool (capacityGroup 'ORBITAL', siehe
+   *     wochenSchichten() in schichtplan.js) - wurden hier aber als zwei
+   *     VOELLIG UNABHAENGIGE Arbeitsgaenge gezaehlt und ihr Bedarf addiert,
+   *     obwohl derselbe Schweisser beide bedient. Ausserdem bedient ein
+   *     Schweisser mehrere Maschinen (machinesPerWelder) - eine Maschine
+   *     ist nicht ein Kopf.
+   *
+   * `workersPerPlace()` aus capacity.js wird hier bewusst NICHT verwendet:
+   * sie behandelt Heften als Sonderfall und liest dafuer immer das globale
+   * Feld `workersPerHeftPlace`, unabhaengig von einem lokalen
+   * `byOperation.HEFTEN.workersPerPlace` - fuer diese Meldung zaehlt aber,
+   * was fuer DIESEN Schichtvorschlag eingestellt wurde.
+   */
+  const koepfeJeSchichtFuerMeldung = (opId, w) => {
+    if (opId === 'ORBITAL_KEHLNAHT' || opId === 'ORBITAL_STUMPFNAHT') {
+      const plaetze = placesFor(config, opId);
+      if (plaetze == null) return 1;
+      const jeSchweisser = Math.max(1, Number(config.resources?.machinesPerWelder ?? 2));
+      return Math.max(1, Math.floor(Number(plaetze) / jeSchweisser));
+    }
+    const plaetze = Math.max(1, Number(w?.places ?? placesFor(config, opId) ?? 1));
+    const jePlatz = Math.max(1, Number(w?.workersPerPlace ?? 1));
+    return plaetze * jePlatz;
+  };
+
   let zusatzKoepfe = 0;
   const mitEigenem = [];
   const ueberAllgemein = [];
+  /** @type {Map<string, {f:number, opId:string, w:any}>} */
+  const gruppenMitHoechstemFaktor = new Map();
   for (const [opId, w] of Object.entries(eigene)) {
     const eigenerWert = w?.operatingHours != null && w.operatingHours !== '';
     const stunden = eigenerWert ? Number(w.operatingHours) : allgemein;
     const f = faktor(stunden);
     if (f <= 1.05) continue;
-    const plaetze = Math.max(1, Number(w?.places ?? 1));
-    const jePlatz = Math.max(1, Number(w?.workersPerPlace ?? 1));
-    zusatzKoepfe += (f - 1) * plaetze * jePlatz;
     const name = OPERATION_BY_ID[opId]?.name ?? opId;
     (eigenerWert ? mitEigenem : ueberAllgemein).push(`${name} (${modell(stunden)})`);
+    const gruppe = OPERATION_BY_ID[opId]?.capacityGroup;
+    if (gruppe) {
+      const bisher = gruppenMitHoechstemFaktor.get(gruppe);
+      if (!bisher || f > bisher.f) gruppenMitHoechstemFaktor.set(gruppe, { f, opId, w });
+      continue;
+    }
+    zusatzKoepfe += (f - 1) * koepfeJeSchichtFuerMeldung(opId, w);
+  }
+  for (const { f, opId, w } of gruppenMitHoechstemFaktor.values()) {
+    zusatzKoepfe += (f - 1) * koepfeJeSchichtFuerMeldung(opId, w);
   }
   zusatzKoepfe = Math.ceil(zusatzKoepfe);
   if (zusatzKoepfe <= 0) return;
@@ -24150,13 +24296,30 @@ function schichten(config, add) {
   const faehig = shiftCapability(config);
   const koepfe = Number(faehig.capable ?? 0);
   if (koepfe < zusatzKoepfe) {
-    add(PLAUSI_LEVEL.KRITISCH, 'SCHICHT_NICHT_BESETZBAR', PLAUSI_AREA.BESETZUNG,
-      'Der eingestellte Schichtbetrieb ist nicht besetzbar',
-      `Die längere Belegungszeit verlangt ${zusatzKoepfe} Personen zusätzlich außerhalb der `
-      + `Regelschicht. Schichtfähig sind ${koepfe}. Betroffen: ${herkunft.join(' · ')}.`,
-      { hint: `${wo} Ohne Schicht fahren laut Auskunft: `
-        + `${(faehig.blockedIds ?? []).join(', ') || '–'}. Entweder die Belegungszeit zurücknehmen `
-        + 'oder schichtfähige Leute dazu holen.',
+    /*
+     * FIX (Nutzervorgabe 23.09.2026, Screenshot "22 Personen zusätzlich...
+     * Schichtfähig sind 11"): Diese Meldung stand bisher als KRITISCH und
+     * "nicht besetzbar" da, obwohl sie mit einem rein HYPOTHETISCHEN
+     * Schichtmodell rechnet (alle Arbeitsgänge mit der hier eingestellten
+     * Belegungszeit, gleichzeitig) - nicht mit dem, was die Terminierung
+     * tatsächlich einplant. Die Terminierung rechnet ohnehin ausschließlich
+     * mit der echten Mannschaftsliste (Vorgabe 17.09.2026); diese Zahl ist
+     * also keine Sperre, sondern nur ein Hinweis, dass dieses konkrete
+     * Schichtmodell voll ausgereizt mehr Leute bräuchte, als schichtfähig
+     * sind. Wie viele Mitarbeiter für ein echtes Ziel (z. B. Termintreue
+     * über 90 %) tatsächlich fehlen, beantwortet "Personalbedarf" unter
+     * Übersicht - auf Abruf, mit der echten Mannschaft gerechnet.
+     */
+    add(PLAUSI_LEVEL.HINWEIS, 'SCHICHT_NICHT_BESETZBAR', PLAUSI_AREA.BESETZUNG,
+      'Dieses Schichtmodell würde mehr schichtfähige Leute brauchen, als da sind',
+      `Liefen alle betroffenen Arbeitsgänge gleichzeitig mit dieser Belegungszeit, bräuchte das `
+      + `${zusatzKoepfe} Personen zusätzlich außerhalb der Regelschicht; schichtfähig sind ${koepfe}. `
+      + `Betroffen: ${herkunft.join(' · ')}. Das ist keine Sperre – die Terminierung rechnet ohnehin `
+      + 'nur mit der echten Mannschaft, nicht mit diesem Modell.',
+      { hint: `${wo} Wie viele Mitarbeiter für eine bestimmte Termintreue tatsächlich fehlen, zeigt `
+        + '"Übersicht" → "Personalbedarf" (rechnet auf Abruf mit der echten Mannschaft statt einem '
+        + `Schichtmodell). Ohne Schicht fahren laut Auskunft: `
+        + `${(faehig.blockedIds ?? []).join(', ') || '–'}.`,
         value: { gebraucht: zusatzKoepfe, faehig: koepfe } });
   } else if (koepfe < zusatzKoepfe * 2) {
     add(PLAUSI_LEVEL.HINWEIS, 'SCHICHT_KNAPP', PLAUSI_AREA.BESETZUNG,

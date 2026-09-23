@@ -454,8 +454,8 @@ export function optimize(input, options = {}) {
 }
 
 /**
- * Wie viele zusaetzliche Mitarbeiter sind ab wann noetig, damit alle Termine
- * gehalten werden?
+ * Wie viele zusaetzliche Mitarbeiter sind ab wann noetig, damit ein
+ * Termintreue-Ziel gehalten wird?
  *
  * Beantwortet die Leitungsfrage "wofuer brauche ich mehr Personal und ab wann".
  * Verfahren: binaere Suche ueber die Anzahl zusaetzlicher Kraefte, jede Stufe
@@ -463,16 +463,31 @@ export function optimize(input, options = {}) {
  * eingesetzt und wirken sofort mit voller Leistung (keine Einarbeitungskurve),
  * damit die Zahl den reinen Kapazitaetsbedarf ausdrueckt.
  *
+ * `zielOtd` (Nutzervorgabe 23.09.2026, ersetzt die bisherige Meldung
+ * "Schichtbetrieb nicht besetzbar" - die mit einem hypothetischen
+ * Schichtmodell statt der echten Mannschaft rechnete): Standardmaessig 100
+ * (alle Termine, wie bisher) - laesst sich aber auf einen Prozentwert wie
+ * 90 senken, um "wie viele Leute für eine Termintreue > 90 %" zu
+ * beantworten, statt nur "für ausnahmslos alle Termine".
+ *
  * @param {{config:any, projects:any[], templates:Record<string,any>}} input
- * @param {{maxStaff?:number, fromWeek?:string}} [options]
+ * @param {{maxStaff?:number, fromWeek?:string, zielOtd?:number}} [options]
  */
 export function requiredAdditionalStaff(input, options = {}) {
   const maxStaff = options.maxStaff ?? 24;
+  const zielOtd = Number(options.zielOtd ?? 100);
+  // Bei 100 % bleibt exakt die bisherige Bedingung (late === 0) - otd >= 100
+  // koennte durch Rundung minimal abweichen und waere keine Nullmassnahme.
+  const erreicht = (kpis) => (zielOtd >= 100 ? kpis.late === 0 : kpis.otd >= zielOtd);
+
   const baseEval = evaluate(input);
   const base = summarize(baseEval.kpis);
 
-  if (base.late === 0) {
-    return { needed: 0, solved: true, fromWeek: null, fromDate: null, base, after: base, evaluations: 1, bottleneck: null };
+  if (erreicht(baseEval.kpis)) {
+    return {
+      needed: 0, solved: true, fromWeek: null, fromDate: null, base, after: base,
+      evaluations: 1, bottleneck: null, zielOtd,
+    };
   }
 
   const weekKeyStart = options.fromWeek ?? baseEval.kpis.firstOverloadWeek ?? weekKey(input.config.planningDate);
@@ -500,13 +515,14 @@ export function requiredAdditionalStaff(input, options = {}) {
   let evaluations = 1;
   const top = evaluate({ ...input, config: withStaff(maxStaff) });
   evaluations++;
-  if (top.kpis.late > 0) {
+  if (!erreicht(top.kpis)) {
     return {
       needed: null, solved: false, fromWeek: weekKeyStart, fromDate,
-      base, after: summarize(top.kpis), triedStaff: maxStaff, evaluations,
+      base, after: summarize(top.kpis), triedStaff: maxStaff, evaluations, zielOtd,
       bottleneck: top.kpis.bottleneck?.label ?? null,
       bottleneckCause: top.kpis.bottleneck?.cause ?? null,
-      note: `Auch mit ${maxStaff} zusätzlichen Mitarbeitern werden nicht alle Termine gehalten. `
+      note: `Auch mit ${maxStaff} zusätzlichen Mitarbeitern wird das Ziel `
+        + `${zielOtd >= 100 ? '(alle Termine)' : `(Termintreue über ${zielOtd} %)`} nicht erreicht. `
         + `Begrenzend ist dann: ${top.kpis.bottleneck?.label ?? 'unbekannt'}.`,
     };
   }
@@ -518,7 +534,7 @@ export function requiredAdditionalStaff(input, options = {}) {
     const mid = Math.floor((low + high) / 2);
     const ev = evaluate({ ...input, config: withStaff(mid) });
     evaluations++;
-    if (ev.kpis.late === 0) { high = mid; bestEval = ev; } else { low = mid + 1; }
+    if (erreicht(ev.kpis)) { high = mid; bestEval = ev; } else { low = mid + 1; }
   }
 
   return {
@@ -529,6 +545,7 @@ export function requiredAdditionalStaff(input, options = {}) {
     base,
     after: summarize(bestEval.kpis),
     evaluations,
+    zielOtd,
     bottleneck: baseEval.kpis.bottleneck?.label ?? null,
     bottleneckCause: baseEval.kpis.bottleneck?.cause ?? null,
   };

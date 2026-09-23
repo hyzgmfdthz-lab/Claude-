@@ -2516,6 +2516,23 @@ function migrate(dataset) {
         if (!bekannteArbeitsgaenge.has(key)) delete p.skills[key];
       }
     }
+    /*
+     * FIX (Nutzermeldung 23.09.2026, Screenshot "Betroffen: ... ORBITAL (2
+     * Schichten)"): Derselbe verwaiste Schluessel wie bei den Skills, nur
+     * hier bei den Belegungszeiten/Plaetzen je Arbeitsgang
+     * (`resources.byOperation`). Ein Schichtvorschlag, der VOR der
+     * Aufteilung angenommen wurde, hat dort "ORBITAL" mit einer eigenen
+     * `operatingHours` hinterlegt. Dieser Schluessel gehoert zu keinem
+     * Arbeitsgang mehr, tauchte in Meldungen nur noch als roher Text
+     * "ORBITAL" auf (weil kein Name mehr dazu existiert) und wurde in der
+     * Schicht-Plausibilitaet als eigener, ungeteilter Arbeitsgang
+     * mitgezaehlt - zusaetzlich zu Kehlnaht und Stumpfnaht, mit dem
+     * falschen Rechenweg (eine Maschine = ein Kopf, statt einen
+     * Schweisser je zwei Maschinen).
+     */
+    for (const key of Object.keys(s.config.resources?.byOperation ?? {})) {
+      if (!bekannteArbeitsgaenge.has(key)) delete s.config.resources.byOperation[key];
+    }
   }
   // Gearbeitet wird auf einem eigenen Stand, damit Aenderungen sofort wirken
   // koennen, ohne die Baseline als Referenz zu verlieren.

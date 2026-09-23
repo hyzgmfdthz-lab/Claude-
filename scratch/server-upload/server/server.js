@@ -211,7 +211,9 @@ async function handleApi(api, req, res, pathname, query, runtime = null) {
       }));
     case 'GET /scenario-config': return sendJson(res, 200, api.scenarioConfig(query.get('scenario')));
     case 'GET /validate': return sendJson(res, 200, api.validate(query.get('scenario')));
-    case 'GET /required-staff': return sendJson(res, 200, api.requiredStaff(query.get('scenario')));
+    case 'GET /required-staff': return sendJson(res, 200, api.requiredStaff(query.get('scenario'), {
+      zielOtd: query.get('zielOtd') ? Number(query.get('zielOtd')) : undefined,
+    }));
     case 'GET /backups': return sendJson(res, 200, api.backups());
 
     case 'POST /projects': return sendJson(res, 201, api.createProject(body));

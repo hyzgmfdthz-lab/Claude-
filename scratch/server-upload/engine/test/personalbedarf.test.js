@@ -199,6 +199,25 @@ test('requiredAdditionalStaff sagt ehrlich, wenn Personal allein nicht hilft', (
   assert.ok(r.note.includes('20'));
 });
 
+test('requiredAdditionalStaff: ein niedrigeres Termintreue-Ziel braucht nicht mehr Personal als 100 %', () => {
+  /*
+   * Nutzervorgabe (23.09.2026): "lediglich ein Hinweis wir brauchen X MA um
+   * eine Termintreue von größer +90% zu erreichen" statt einer Meldung, die
+   * ausnahmslos alle Termine verlangt (die bisherige "Schichtbetrieb nicht
+   * besetzbar"-Meldung rechnete mit einem hypothetischen Schichtmodell,
+   * nicht mit der echten Mannschaft). `zielOtd` macht das Ziel einstellbar,
+   * standardmäßig bleiben es 100 % (unverändertes Verhalten, siehe Test
+   * oben).
+   */
+  const input = { config: testConfig({ workforce: { baseHeadcount: 2 } }), ...load(20, 60, '2026-10-16') };
+  const fuerAlle = requiredAdditionalStaff(input, { maxStaff: 30 });
+  const fuer90 = requiredAdditionalStaff(input, { maxStaff: 30, zielOtd: 90 });
+  assert.equal(fuer90.solved, true);
+  assert.ok(fuer90.needed < fuerAlle.needed,
+    `90 % Termintreue muss hier mit weniger Personal auskommen als 100 % (${fuer90.needed} vs. ${fuerAlle.needed})`);
+  assert.ok(fuer90.after.otd >= 90, `nach Anwendung muss die Termintreue mindestens 90 % sein, war ${fuer90.after.otd}`);
+});
+
 test('requiredAdditionalStaff rechnet ohne Einarbeitungsabschlag', () => {
   // Die Zahl soll den reinen Kapazitaetsbedarf zeigen, nicht die Einarbeitung.
   const input = { config: testConfig({ workforce: { baseHeadcount: 2 } }), ...load(4, 300, '2026-10-16') };

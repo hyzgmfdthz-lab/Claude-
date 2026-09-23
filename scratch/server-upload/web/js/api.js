@@ -149,7 +149,8 @@ export const api = {
     + `&from=${encodeURIComponent(range?.from ?? '')}&to=${encodeURIComponent(range?.to ?? '')}`),
   scenarioConfig: (scenario) => request('GET', `/api/scenario-config?scenario=${encodeURIComponent(scenario)}`),
   validate: (scenario) => request('GET', `/api/validate?scenario=${encodeURIComponent(scenario ?? '')}`),
-  requiredStaff: (scenario) => request('GET', `/api/required-staff?scenario=${encodeURIComponent(scenario ?? '')}`),
+  requiredStaff: (scenario, zielOtd) => request('GET', `/api/required-staff?scenario=${encodeURIComponent(scenario ?? '')}`
+    + (zielOtd != null ? `&zielOtd=${encodeURIComponent(zielOtd)}` : '')),
   revision: () => request('GET', '/api/revision'),
 
   createProject: (p) => request('POST', '/api/projects', p),

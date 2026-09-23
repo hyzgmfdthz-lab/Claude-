@@ -357,6 +357,41 @@ test('Migration: alte Ja/Nein-Qualifikation wird zu Skill-Level übersetzt', () 
   assert.equal(person.skills.MOLCHEN, 2);
 });
 
+test('Migration: verwaistes "ORBITAL" in den Belegungszeiten wird entfernt', () => {
+  /*
+   * Nutzermeldung 23.09.2026 (Screenshot "Betroffen: ... ORBITAL (2
+   * Schichten)"): Ein VOR der Aufteilung in Kehlnaht/Stumpfnaht
+   * angenommener Schichtvorschlag hat in resources.byOperation einen
+   * Eintrag "ORBITAL" mit eigener operatingHours hinterlegt. Dieser
+   * Arbeitsgang existiert nicht mehr - der Eintrag muss bei der Migration
+   * verschwinden, sonst taucht er in Meldungen als roher Schlüsselname auf
+   * und wird zusätzlich zu Kehlnaht/Stumpfnaht mitgezählt.
+   */
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'megc-migrate-orbital-'));
+  const store = openStore(dir, { forceFile: true });
+  store.save({
+    meta: { version: 1, createdAt: new Date().toISOString() },
+    projects: [],
+    scenarios: [{
+      id: 'BASELINE', name: 'Baseline', isBaseline: true, createdAt: new Date().toISOString(),
+      config: {
+        resources: {
+          byOperation: {
+            ORBITAL: { operatingHours: 15 },
+            SAEGEN: { operatingHours: 15 },
+          },
+        },
+      },
+      projectOverrides: {}, sequenceOverride: null,
+    }],
+  }, 'Ausgangsstand');
+
+  const api = createApi(store);
+  const byOperation = api.scenarioConfig('BASELINE').config.resources.byOperation;
+  assert.equal(byOperation.ORBITAL, undefined, 'der verwaiste Schlüssel muss entfernt werden');
+  assert.equal(byOperation.SAEGEN.operatingHours, 15, 'gültige Einträge bleiben unangetastet');
+});
+
 test('Änderungsprotokoll: Mannschaftsänderung wird lesbar zusammengefasst', () => {
   /*
    * FIX (gefunden 21.09.2026 anhand eines Screenshots): eine Änderung an

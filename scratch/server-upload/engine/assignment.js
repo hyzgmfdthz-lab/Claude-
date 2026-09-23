@@ -218,7 +218,20 @@ export function assignPeople(result, config, range = {}) {
          */
         const versucheAushilfe = () => {
           if (hilfeRestHeute <= 0.01 || restStunden <= 0.01) return false;
-          const frei = anwesend.filter((p) => !heuteAn[p.id]?.length && (rest[p.id] ?? 0) > 0.01);
+          /*
+           * FIX (Nutzervorgabe 23.09.2026, "die unter Mannschaft angegebene
+           * Schicht ist maßgeblich für die Einteilung auf die
+           * Arbeitsplätze"): Der reguläre Weg oben prüft schon, dass eine
+           * Person nur in IHRER Schicht eingeteilt wird
+           * (`(schichtVon[p.id] ?? 1) === sn`). Dieser Aushilfe-Zweig hat
+           * das nicht getan - eine fuer Schicht 2 eingeteilte Person konnte
+           * so als Helfer an einem Arbeitsgang landen, der nur in Schicht 1
+           * laeuft (oder umgekehrt), obwohl beide zeitlich gar nicht
+           * zusammentreffen. Die Person muss also in einer Schicht stehen,
+           * in der dieser Arbeitsgang ueberhaupt laeuft.
+           */
+          const frei = anwesend.filter((p) => !heuteAn[p.id]?.length && (rest[p.id] ?? 0) > 0.01
+            && (schichtVon[p.id] ?? 1) <= opSchichten);
           if (frei.length === 0) return false;
           frei.sort((x, y) => {
             const lx = byPerson[x.id].hours / Math.max(0.1, byPerson[x.id].factor);

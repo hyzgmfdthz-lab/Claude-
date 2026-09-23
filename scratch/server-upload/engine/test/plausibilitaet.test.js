@@ -148,7 +148,13 @@ test('Plausibilität: zugesagte Leiharbeiter ohne Einsatzende werden benannt', (
 
 /* ---------------- Schichten ---------------- */
 
-test('Plausibilität: nicht besetzbarer Schichtbetrieb ist kritisch', () => {
+test('Plausibilität: ein Schichtmodell ohne genug schichtfähige Leute ist ein Hinweis, keine Sperre', () => {
+  /*
+   * FIX (Nutzervorgabe 23.09.2026): Die Meldung stand vorher als KRITISCH
+   * da, obwohl sie mit einem hypothetischen Schichtmodell rechnet, nicht
+   * mit der echten Terminierung (die ohnehin nur die Mannschaftsliste
+   * verwendet). Jetzt ist es ein HINWEIS.
+   */
   const input = simpleInput({ hours: 400 });
   const c = input.config;
   c.workforce.team = defaultTeam();
@@ -161,8 +167,8 @@ test('Plausibilität: nicht besetzbarer Schichtbetrieb ist kritisch', () => {
   };
   const { byCode } = pruefe(input);
   const i = byCode.SCHICHT_NICHT_BESETZBAR;
-  assert.ok(i, 'ohne schichtfähige Leute ist der Schichtbetrieb nicht besetzbar');
-  assert.equal(i.level, 'KRITISCH');
+  assert.ok(i, 'ohne schichtfähige Leute meldet sich das Schichtmodell');
+  assert.equal(i.level, 'HINWEIS');
   assert.equal(i.value.faehig, 0);
   assert.equal(i.value.gebraucht, 6, 'zwei zusätzliche Schichten auf drei Plätzen');
 });
@@ -433,6 +439,56 @@ test('Die Schichtmeldung sagt, ob der Wert allgemein oder je Arbeitsgang gesetzt
   assert.match(i.text, /allgemeine Belegungszeit von 15 h – nicht einzeln eingestellt/);
   assert.match(i.hint, /Einstellungen → Parameter/);
   assert.equal(i.value.gebraucht, 3, 'drei Plätze, eine zusätzliche Schicht');
+});
+
+test('Kehlnaht und Stumpfnaht Orbital teilen sich einen Kapazitätstopf – kein doppelter Bedarf', () => {
+  /*
+   * Nutzermeldung (23.09.2026): "22 MA fehlen ... es muss nicht zwingend
+   * jeder Arbeitsgang immer 2-schichtig laufen." Ein Teil der Ursache: Beide
+   * Orbital-Arbeitsgänge teilen sich denselben Maschinen-/Schweißer-Pool
+   * (capacityGroup 'ORBITAL', siehe wochenSchichten() in schichtplan.js) -
+   * wurden hier aber als zwei völlig unabhängige Arbeitsgänge gezählt und
+   * ihr Bedarf addiert, obwohl derselbe Schweißer beide bedient.
+   */
+  const input = simpleInput({ hours: 400 });
+  const c = input.config;
+  c.workforce.team = defaultTeam();
+  c.workforce.team.source = 'MANNSCHAFT';
+  for (const p of c.workforce.team.people) p.shiftCapable = false;
+  // Kein eigener Platzeintrag - die Kapazität kommt aus dem globalen
+  // orbitalMachinesActive (20 Maschinen, testConfig()) und
+  // machinesPerWelder (Standard 2) -> 10 Schweißer gleichzeitig.
+  c.resources.byOperation = {
+    ORBITAL_KEHLNAHT: { operatingHours: 15 },
+    ORBITAL_STUMPFNAHT: { operatingHours: 15 },
+  };
+  const { byCode } = pruefe(input);
+  const i = byCode.SCHICHT_NICHT_BESETZBAR;
+  assert.ok(i, 'ohne schichtfähige Leute wird die längere Belegungszeit gemeldet');
+  assert.equal(i.value.gebraucht, 10,
+    'Kehlnaht und Stumpfnaht teilen sich denselben Schweißer-Pool - der Bedarf darf nicht verdoppelt werden '
+    + '(sonst wären es 20)');
+});
+
+test('Heften ohne eigenen Platzeintrag rechnet mit der wirklichen Heftplatzzahl, nicht mit dem Standardwert 1', () => {
+  /*
+   * Zweiter Teil derselben Ursache: Heften, Kehlnaht/Stumpfnaht Orbital und
+   * Molchen haben keinen eigenen `places`-Eintrag (ihre Kapazität steckt in
+   * eigenen Feldern wie `heftPlaces`) - fielen hier bisher still auf den
+   * Standardwert 1 zurück, unabhängig von der wirklichen Platzzahl.
+   */
+  const input = simpleInput({ hours: 400 });
+  const c = input.config;
+  c.workforce.team = defaultTeam();
+  c.workforce.team.source = 'MANNSCHAFT';
+  for (const p of c.workforce.team.people) p.shiftCapable = false;
+  // Kein eigener Platzeintrag - die Kapazität kommt aus dem globalen
+  // heftPlaces (10, testConfig()).
+  c.resources.byOperation = { HEFTEN: { operatingHours: 15 } };
+  const { byCode } = pruefe(input);
+  const i = byCode.SCHICHT_NICHT_BESETZBAR;
+  assert.ok(i);
+  assert.equal(i.value.gebraucht, 10, 'zehn Heftplätze, nicht der frühere Standardwert 1');
 });
 
 test('Zahlenlisten neben der Mannschaft werden gemeldet und getrennt ausgewiesen', () => {
