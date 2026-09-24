@@ -12204,6 +12204,22 @@ function createApi(store, options = {}) {
         if (!sheet) throw new ApiError('Die Datei enthält keine Tabelle.');
         rows = sheet.rows;
       } else {
+        /*
+         * FIX (Nutzermeldung 24.09.2026, "die Datensicherung habe ich hier
+         * hochgeladen"): Eine JSON-Datensicherung wurde ueber dieses Feld
+         * (gedacht fuer Excel/CSV-Projektlisten) als CSV eingelesen. readCsv
+         * ist absichtlich tolerant - aus jeder Zeile der JSON-Datei wurde
+         * dadurch eine "Zeile", und importRows() fand irgendwo darin
+         * zufaellig ein Wort wie "Projekt" oder "Auftrag" als vermeintliche
+         * Kopfzeile. Ergebnis: mehrere tausend Muell-Projekte, im Modus
+         * "ersetzen" sogar anstelle der echten Auftraege. Eine JSON-Datei
+         * wird deshalb jetzt VOR dem Parsen erkannt und klar abgelehnt,
+         * statt sie als Tabelle misszuverstehen.
+         */
+        if (/^\s*[{[]/.test(String(data))) {
+          throw new ApiError('Diese Datei sieht nach einer Datensicherung (JSON) aus, nicht nach einer '
+            + 'Projektliste (Excel/CSV). Dieses Feld ist nur für Auftragslisten gedacht.');
+        }
         rows = codec.readCsv(data);
       }
       const result = importRows(dataset, rows, mode);
@@ -12509,8 +12525,15 @@ function findColumn(header, names) {
  * gefuellt, gilt dieser Termin. Andernfalls der urspruengliche Termin.
  */
 function importRows(dataset, rows, mode = 'merge') {
-  const headerIdx = rows.findIndex((r) => r && r.some((c) => /auftrag|projekt|kunde/i.test(String(c ?? ''))));
-  if (headerIdx < 0) throw new ApiError('Es wurde keine Kopfzeile mit "Auftrag" oder "Projekt" gefunden.');
+  /*
+   * FIX (Nutzermeldung 24.09.2026): eine echte Kopfzeile steht immer ganz
+   * oben. Ohne diese Grenze fand die Suche bei einer falsch hochgeladenen,
+   * sehr grossen Datei irgendwo mitten drin zufaellig eine Zeile mit einem
+   * Treffer und tat danach so, als waere alles Weitere eine Projektliste -
+   * mit tausenden Muell-"Projekten" als Folge.
+   */
+  const headerIdx = rows.slice(0, 20).findIndex((r) => r && r.some((c) => /auftrag|projekt|kunde/i.test(String(c ?? ''))));
+  if (headerIdx < 0) throw new ApiError('Es wurde keine Kopfzeile mit "Auftrag" oder "Projekt" in den ersten 20 Zeilen gefunden.');
   const header = rows[headerIdx].map((c) => String(c ?? ''));
 
   const col = {
