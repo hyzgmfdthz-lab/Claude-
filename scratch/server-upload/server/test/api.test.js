@@ -332,6 +332,37 @@ test('Import: Modus "ersetzen" entfernt nicht enthaltene Projekte', () => {
   assert.equal(api.state().projects[0].orderNo, 'NUR-1');
 });
 
+/*
+ * FIX (Nutzermeldung 24.09.2026, "da scheint was schief gelaufen zu sein"):
+ * eine volle JSON-Datensicherung wurde über die Projekt-Import-Karte
+ * hochgeladen (die dafür nicht gedacht ist), als CSV gelesen und ergab
+ * tausende Müll-"Projekte" - im Modus "ersetzen" sogar anstelle der
+ * echten Aufträge. Die Datei muss jetzt VOR dem Parsen abgelehnt werden.
+ */
+test('Import: eine JSON-Datensicherung wird abgelehnt statt als Müll eingelesen', () => {
+  const api = freshApi();
+  const vorher = api.state().projects.length;
+  const json = JSON.stringify({ projects: [{ orderNo: 'FAKE-1' }, { orderNo: 'FAKE-2' }] });
+  assert.throws(
+    () => api.importProjects({ format: 'csv', data: json, mode: 'merge' }),
+    /Datensicherung.*JSON/,
+  );
+  assert.equal(api.state().projects.length, vorher, 'unverändert - keine Müll-Projekte angelegt');
+
+  assert.throws(
+    () => api.importProjects({ format: 'csv', data: json, mode: 'replace' }),
+    /Datensicherung.*JSON/,
+  );
+  assert.equal(api.state().projects.length, vorher, 'im Modus "ersetzen" bleiben die echten Aufträge erhalten');
+});
+
+test('Import: eine echte Kopfzeile weit unten in einer zu großen Datei wird nicht mehr gefunden', () => {
+  const dataset = { projects: [] };
+  const muell = Array.from({ length: 30 }, () => ['irgendein Text ohne Bezug']);
+  const rows = [...muell, ['Auftrag', 'Kunde', 'Fertigstellung'], ['A-1', 'Kunde', '01.10.2026']];
+  assert.throws(() => importRows(dataset, rows, 'merge'), /Kopfzeile/);
+});
+
 test('Export: Szenariovergleich als Tabelle', () => {
   const api = freshApi();
   const rows = comparisonRows(api.compare(['BASELINE']));
