@@ -725,7 +725,10 @@ test('Datenbestand aus der Vorversion wird ergänzt, nicht beschädigt', () => {
   assert.ok(api.users().length >= 6, 'die Kürzel werden angelegt');
   assert.ok(api.users().some((u) => u.admin), 'es gibt eine Verwaltung');
   assert.deepEqual(api.changeLog(5), []);
-  assert.deepEqual(api.rules().rules, []);
+  // Seit 24.09.2026 legt die Migration selbst eine Standard-Regel an
+  // (Saegen darf beliebig frueh beginnen) - "leer" heisst deshalb nicht
+  // mehr []; geprueft wird stattdessen, dass genau diese eine Regel da ist.
+  assert.deepEqual(api.rules().rules.map((r) => r.id), ['REG-SAEGEN-VORLAUF-STANDARD']);
   assert.equal(api.state().currentPlanScenarioId, null);
 
   // Die Planung selbst ist unverändert rechenbar

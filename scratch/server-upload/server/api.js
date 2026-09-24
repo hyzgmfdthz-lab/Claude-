@@ -2660,6 +2660,41 @@ function migrate(dataset) {
       if (!bekannteArbeitsgaenge.has(key)) delete s.config.resources.byOperation[key];
     }
   }
+  /*
+   * Einmalige Korrektur (Nutzerauftrag 24.09.2026): Im Arbeitsstand standen
+   * Biegen/Saegen/Entgraten auf 2 Plaetzen - abweichend von ALLEN anderen
+   * Szenarien (auch der unveraenderten Baseline), wo schon "1" stand. Laut
+   * Abteilungsleitung ist "1 Platz, ein zweiter bei Bedarf einrichtbar" die
+   * Wahrheit - die "2" war ein Ausrutscher, keine bestaetigte Aenderung.
+   * Nur einmal (Merker in meta), damit eine spaeter bewusst gesetzte "2"
+   * beim naechsten Start nicht wieder ueberschrieben wird.
+   */
+  if (!dataset.meta.platzKorrektur24_09) {
+    for (const s of dataset.scenarios) {
+      const byop = (s.config.resources ??= {}).byOperation ??= {};
+      for (const opId of ['BIEGEN', 'SAEGEN', 'ENTGRATEN']) {
+        if (Number(byop[opId]?.places) === 2) byop[opId] = { ...byop[opId], places: 1 };
+      }
+      // Molchen hatte noch gar keinen eigenen Platzwert (unbegrenzt) - "1 Platz" bestaetigt.
+      if (byop.MOLCHEN?.places == null || byop.MOLCHEN?.places === '') {
+        byop.MOLCHEN = { ...byop.MOLCHEN, places: 1, workersPerPlace: byop.MOLCHEN?.workersPerPlace ?? 1 };
+      }
+    }
+    dataset.meta.platzKorrektur24_09 = true;
+  }
+  /*
+   * Einmalige Anhebung (Nutzerauftrag 24.09.2026): "eure reale Lieferzeit"
+   * ist 6 Wochen, nicht 4. Nur dort angehoben, wo noch der alte Wert steht -
+   * eine bewusst abweichend gesetzte Frist bleibt unangetastet.
+   */
+  if (!dataset.meta.materialfrist24_09) {
+    for (const s of dataset.scenarios) {
+      if (Number(s.config.leadTimes?.materialWeeks) === 4) {
+        s.config.leadTimes = { ...s.config.leadTimes, materialWeeks: 6 };
+      }
+    }
+    dataset.meta.materialfrist24_09 = true;
+  }
   // Gearbeitet wird auf einem eigenen Stand, damit Aenderungen sofort wirken
   // koennen, ohne die Baseline als Referenz zu verlieren.
   if (!dataset.scenarios.some((s) => s.id === 'ARBEITSSTAND')) {
@@ -2702,6 +2737,25 @@ function migrate(dataset) {
   dataset.meta.referenceStateId ??= null;
   dataset.meta.targetStateId ??= null;
   dataset.rules = Array.isArray(dataset.rules) ? dataset.rules : [];
+  /*
+   * Einmalige Standard-Regel (Nutzerauftrag 24.09.2026): "Saegen kann
+   * durchgaengig alle Auftraege saegen." Als normale, ausschaltbare Regel
+   * angelegt (Wunsch: "so, dass ich sie ggf. auch wieder ausschalten
+   * kann"), nicht hart im Code verdrahtet. `ignoreMaterial` respektiert
+   * weiterhin eine ausdruecklich gemeldete Fehlteil-Sperre (project.missingParts).
+   */
+  if (!dataset.rules.some((r) => r.id === 'REG-SAEGEN-VORLAUF-STANDARD')) {
+    dataset.rules.push({
+      id: 'REG-SAEGEN-VORLAUF-STANDARD',
+      text: 'Sägen darf beliebig früh beginnen – Material gilt als vorhanden (außer bei gemeldeten Fehlteilen)',
+      type: 'VORLAUF',
+      enabled: true,
+      scope: { kind: 'ALL', projectTypes: [], variants: [], projectIds: [] },
+      createdAt: new Date().toISOString(),
+      createdBy: 'System',
+      params: { opIds: ['SAEGEN'], weeks: 260, anchor: 'DUE', anchorOpId: null, ignoreMaterial: true },
+    });
+  }
   dataset.history = Array.isArray(dataset.history) ? dataset.history : [];
   for (const p of dataset.projects) {
     const filled = createProject(p);

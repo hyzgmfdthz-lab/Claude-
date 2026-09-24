@@ -376,6 +376,8 @@ export function defaultPlaces() {
      * Mann" - fester, kleiner Platz, kein Aushilfe-Mechanismus.
      */
     HANDSCHWEISSEN: { places: 1, workersPerPlace: 1, note: 'ein Platz, ein Mann' },
+    /** Molchen (Nutzerauftrag 24.09.2026): ein Platz, ein Mann. */
+    MOLCHEN: { places: 1, workersPerPlace: 1 },
   };
 }
 
@@ -711,8 +713,15 @@ export function defaultConfig() {
       requireNoBo: true,
     },
 
+    /*
+     * materialWeeks von 4 auf 6 Wochen (Nutzerauftrag 24.09.2026, "das ist
+     * eure reale Lieferzeit"). Getestet an echten Daten (38 Aufträge): hat
+     * fuer sich genommen KEINE Wirkung auf die Termintreue - Material ist
+     * derzeit nirgends der Engpass. Die Aenderung ist trotzdem richtig
+     * (bildet die reale Lieferzeit ab), nur eben kein Termintreue-Hebel.
+     */
     leadTimes: {
-      materialWeeks: 4,
+      materialWeeks: 6,
       startWeeks: { NEUBAU: 3, UMBAU: 4, WKP: 4, PRUEFER: 4, REPARATUR: 2, SONDER: 4, ZUBEHOER: 1 },
       validated: true,
     },
