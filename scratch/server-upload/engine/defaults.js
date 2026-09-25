@@ -319,6 +319,31 @@ export function defaultPlaces() {
     BIEGEN: { places: 1, workersPerPlace: 1 },
     BEIZEN: { places: 1, workersPerPlace: 1 },
     /*
+     * Orbital Kehlnaht/Stumpfnaht (Nutzerauftrag 24.09.2026): "die 2 MA
+     * gehen notfalls als Helfer bei einem anderen Arbeitsgang
+     * unterstützen". Wirkt in der Rechnung nur, wenn die MASCHINEN die
+     * Grenze sind (nicht wenn Schweißer fehlen - siehe capacity.js).
+     * Ein Helfer kann Rohrstücke ruesten/entnehmen, waehrend der
+     * Schweißer nur schweißt - Wert probeweise wie bei Hydro
+     * uebernommen (validated: false, noch zu bestaetigen).
+     */
+    ORBITAL_KEHLNAHT: {
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 1, validated: false,
+        label: 'Rohrstücke rüsten/entnehmen',
+        text: 'Ein Mitarbeiter rüstet Rohrstücke und arbeitet dem Schweißer zu (Wert vorläufig von '
+          + 'der Hydroprüfung übernommen, noch zu bestätigen).',
+      },
+    },
+    ORBITAL_STUMPFNAHT: {
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 1, validated: false,
+        label: 'Rohrstücke rüsten/entnehmen',
+        text: 'Ein Mitarbeiter rüstet Rohrstücke und arbeitet dem Schweißer zu (Wert vorläufig von '
+          + 'der Hydroprüfung übernommen, noch zu bestätigen).',
+      },
+    },
+    /*
      * Doppelklemmring-Vormontage: zwei Plaetze, JE EINE Person - nicht
      * "je zwei Personen" (das waere doppelte Kapazitaet, die es nicht
      * gibt). Bestaetigt von der Abteilungsleitung 19.09.2026: "2
@@ -678,7 +703,10 @@ export function defaultConfig() {
        * Eigene Werte je Arbeitsgang. Leer = es gilt der allgemeine Wert.
        *   operatingHours: Belegungszeit dieses Arbeitsganges je Tag
        *   places:         Anzahl der Plaetze/Maschinen (null = keine Begrenzung)
-       * @type {Record<string, {operatingHours?:number|null, places?:number|null}>}
+       *   aushilfe:       Helfer, der die Platzgrenze anheben kann (siehe capacity.js)
+       * @type {Record<string, {operatingHours?:number|null, places?:number|null,
+       *   aushilfe?:{max:number, leistung:number, stundenfaktor:number, validated:boolean,
+       *     label:string, text:string}}>}
        */
       byOperation: defaultPlaces(),
       /**

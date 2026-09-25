@@ -281,6 +281,16 @@ export function planeSchichten(input, result, rechne, opts = {}) {
       config = naechsteConfig;
       stand = gerechnet;
       uebernommen = true;
+      /*
+       * Eine angenommene Schicht aendert den Stand fuer ALLE anderen
+       * Arbeitsgaenge mit - ein vorhin verworfener Kandidat kann dadurch
+       * jetzt doch etwas bringen (Nutzerpruefung 24.09.2026: ohne diese
+       * Zeile blieb ein zweiter Biegeplatz dauerhaft verworfen, obwohl er
+       * nach spaeteren Schichten nachweislich noch Verspaetung abbaute -
+       * ein zweiter Lauf von planeSchichten fand ihn dann noch, obwohl der
+       * erste Lauf laengst "fertig" gemeldet hatte).
+       */
+      verworfen.clear();
       break;
     }
     if (!uebernommen) break;

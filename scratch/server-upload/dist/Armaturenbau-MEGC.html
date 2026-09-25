@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Armaturenbau MEGC – Produktionsplanung</title>
-<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-24">
+<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-25">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%2300727a'/><path d='M22 70V30h11v15h12V30h11v40H45V55H33v15z' fill='white'/></svg>">
 <style>
 /* ==================================================================
@@ -12851,13 +12851,30 @@ function gerechneteBesetzung(cfg) {
 /**
  * Personentage ohne Arbeit, nach Grund - die Zahl, die den Blick auf die
  * Plaetze lenkt statt auf die Mannschaft.
+ *
+ * Gezaehlt wird nur bis zum letzten Tag mit wirklich eingeplanter Arbeit
+ * (`entries.length > 0`, irgendwo im Betrieb). Ein Schichtplan, der den
+ * gesamten bekannten Auftragsbestand vorzeitig abarbeitet, ist ein Erfolg,
+ * kein Leerlauf - der lange leere Rest des Rechenfensters danach (es gibt
+ * schlicht noch keine neuen Auftraege dafuer) darf nicht als verschenkte
+ * Kapazitaet mitgezaehlt werden. Gefunden bei der Orbital-Aushilfe-Pruefung
+ * (24.09.2026): ein Schichtvorschlag mit sechs statt fuenf Arbeitsgaengen in
+ * Zusatzschicht liess den Bestand so viel frueher fertig werden, dass die
+ * ungekuerzte Summe von 112 auf 3085 Personentage "Leerlauf" sprang - fast
+ * ausschliesslich der leere Rest nach Auftragsende.
  * @param {any} plan Ergebnis von assignPeople
  */
 function leerlaufSumme(plan) {
+  const tage = plan.days ?? [];
+  let letzterArbeitstag = null;
+  for (const t of tage) {
+    if ((t.entries?.length ?? 0) > 0) letzterArbeitstag = t.date;
+  }
   /** @type {Record<string, number>} */
   const gruende = {};
   let summe = 0;
-  for (const t of plan.days ?? []) {
+  for (const t of tage) {
+    if (letzterArbeitstag && t.date > letzterArbeitstag) continue;
     for (const i of t.idle ?? []) {
       gruende[i.grund] = (gruende[i.grund] ?? 0) + 1;
       summe += 1;
@@ -15591,6 +15608,31 @@ function defaultPlaces() {
     BIEGEN: { places: 1, workersPerPlace: 1 },
     BEIZEN: { places: 1, workersPerPlace: 1 },
     /*
+     * Orbital Kehlnaht/Stumpfnaht (Nutzerauftrag 24.09.2026): "die 2 MA
+     * gehen notfalls als Helfer bei einem anderen Arbeitsgang
+     * unterstützen". Wirkt in der Rechnung nur, wenn die MASCHINEN die
+     * Grenze sind (nicht wenn Schweißer fehlen - siehe capacity.js).
+     * Ein Helfer kann Rohrstücke ruesten/entnehmen, waehrend der
+     * Schweißer nur schweißt - Wert probeweise wie bei Hydro
+     * uebernommen (validated: false, noch zu bestaetigen).
+     */
+    ORBITAL_KEHLNAHT: {
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 1, validated: false,
+        label: 'Rohrstücke rüsten/entnehmen',
+        text: 'Ein Mitarbeiter rüstet Rohrstücke und arbeitet dem Schweißer zu (Wert vorläufig von '
+          + 'der Hydroprüfung übernommen, noch zu bestätigen).',
+      },
+    },
+    ORBITAL_STUMPFNAHT: {
+      aushilfe: {
+        max: 1, leistung: 0.5, stundenfaktor: 1, validated: false,
+        label: 'Rohrstücke rüsten/entnehmen',
+        text: 'Ein Mitarbeiter rüstet Rohrstücke und arbeitet dem Schweißer zu (Wert vorläufig von '
+          + 'der Hydroprüfung übernommen, noch zu bestätigen).',
+      },
+    },
+    /*
      * Doppelklemmring-Vormontage: zwei Plaetze, JE EINE Person - nicht
      * "je zwei Personen" (das waere doppelte Kapazitaet, die es nicht
      * gibt). Bestaetigt von der Abteilungsleitung 19.09.2026: "2
@@ -15950,7 +15992,10 @@ function defaultConfig() {
        * Eigene Werte je Arbeitsgang. Leer = es gilt der allgemeine Wert.
        *   operatingHours: Belegungszeit dieses Arbeitsganges je Tag
        *   places:         Anzahl der Plaetze/Maschinen (null = keine Begrenzung)
-       * @type {Record<string, {operatingHours?:number|null, places?:number|null}>}
+       *   aushilfe:       Helfer, der die Platzgrenze anheben kann (siehe capacity.js)
+       * @type {Record<string, {operatingHours?:number|null, places?:number|null,
+       *   aushilfe?:{max:number, leistung:number, stundenfaktor:number, validated:boolean,
+       *     label:string, text:string}}>}
        */
       byOperation: defaultPlaces(),
       /**
@@ -16786,8 +16831,20 @@ function dayCapacity(config, date) {
      * sie wird dann auch nicht ausgewiesen.
      */
     const hilfe = aushilfeVon(config, op.id);
+    /*
+     * Orbital (Nutzerauftrag 24.09.2026, "die 2 MA gehen notfalls als
+     * Helfer bei einem anderen Arbeitsgang unterstützen"): nur wenn die
+     * MASCHINEN die Grenze sind, nicht wenn die eingesetzten Schweißer
+     * fehlen (ORBITAL_WELDER) - das ist die Mannschaft selbst, dagegen
+     * hilft ein ungelernter Helfer nachweislich nichts (siehe Kommentar
+     * oben bei "Aushilfe: Sie hebt die PLATZgrenze, nicht die Mannschaft").
+     * Ein Helfer kann Rohrstücke ruesten/entnehmen, waehrend der
+     * Schweißer nur schweißt - das verkuerzt die Maschinenbelegung je
+     * Naht, genau wie bei Hydro/Endkontrolle.
+     */
     const plaetzeBegrenzen = limiter === LIMITER.WORKPLACE || limiter === LIMITER.HYDRO_STATION
-      || limiter === LIMITER.BEIZ_STATION || limiter === LIMITER.HEFTPLATZ;
+      || limiter === LIMITER.BEIZ_STATION || limiter === LIMITER.HEFTPLATZ
+      || limiter === LIMITER.ORBITAL_MACHINE;
     if (hilfe && plaetzeBegrenzen && capUnits > 0) {
       const zusatz = hilfe.max * hilfe.leistung * opWindow * prod;
       detail.aushilfe = {
@@ -22546,6 +22603,16 @@ function planeSchichten(input, result, rechne, opts = {}) {
       config = naechsteConfig;
       stand = gerechnet;
       uebernommen = true;
+      /*
+       * Eine angenommene Schicht aendert den Stand fuer ALLE anderen
+       * Arbeitsgaenge mit - ein vorhin verworfener Kandidat kann dadurch
+       * jetzt doch etwas bringen (Nutzerpruefung 24.09.2026: ohne diese
+       * Zeile blieb ein zweiter Biegeplatz dauerhaft verworfen, obwohl er
+       * nach spaeteren Schichten nachweislich noch Verspaetung abbaute -
+       * ein zweiter Lauf von planeSchichten fand ihn dann noch, obwohl der
+       * erste Lauf laengst "fertig" gemeldet hatte).
+       */
+      verworfen.clear();
       break;
     }
     if (!uebernommen) break;

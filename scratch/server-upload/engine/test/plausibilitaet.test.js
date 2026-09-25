@@ -538,7 +538,10 @@ test('Wenn die Plätze begrenzen, wird NICHT nach Personal gerufen', () => {
   const i = a.plausibility.items.find((x) => x.code === 'MANNSCHAFT_NICHT_AUSLASTBAR');
   assert.ok(i, 'stattdessen muss die Anwendung sagen, dass Personal hier nicht hilft');
   assert.equal(i.area, 'Besetzung');
-  assert.ok(i.value.auslastung < 0.9, `Auslastung ${i.value.auslastung} müsste unter 90 % liegen`);
+  // Seit die Orbital-Aushilfe (24.09.2026) etwas mehr Arbeit an den Maschinen
+  // vorbeischleust, steigt die Poolauslastung leicht - entscheidend bleibt aber
+  // (siehe oben), dass sie NICHT der Grund für den Pfad ist: poolGenutzt < poolKapazitaet.
+  assert.ok(i.value.auslastung < 0.95, `Auslastung ${i.value.auslastung} müsste unter 95 % liegen`);
   assert.ok(i.value.poolGenutzt < i.value.poolKapazitaet);
   assert.match(i.text, /nicht an Leuten/);
   assert.match(i.hint, /nur danebenstehen/);

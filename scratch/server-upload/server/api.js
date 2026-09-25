@@ -2469,13 +2469,30 @@ function gerechneteBesetzung(cfg) {
 /**
  * Personentage ohne Arbeit, nach Grund - die Zahl, die den Blick auf die
  * Plaetze lenkt statt auf die Mannschaft.
+ *
+ * Gezaehlt wird nur bis zum letzten Tag mit wirklich eingeplanter Arbeit
+ * (`entries.length > 0`, irgendwo im Betrieb). Ein Schichtplan, der den
+ * gesamten bekannten Auftragsbestand vorzeitig abarbeitet, ist ein Erfolg,
+ * kein Leerlauf - der lange leere Rest des Rechenfensters danach (es gibt
+ * schlicht noch keine neuen Auftraege dafuer) darf nicht als verschenkte
+ * Kapazitaet mitgezaehlt werden. Gefunden bei der Orbital-Aushilfe-Pruefung
+ * (24.09.2026): ein Schichtvorschlag mit sechs statt fuenf Arbeitsgaengen in
+ * Zusatzschicht liess den Bestand so viel frueher fertig werden, dass die
+ * ungekuerzte Summe von 112 auf 3085 Personentage "Leerlauf" sprang - fast
+ * ausschliesslich der leere Rest nach Auftragsende.
  * @param {any} plan Ergebnis von assignPeople
  */
 function leerlaufSumme(plan) {
+  const tage = plan.days ?? [];
+  let letzterArbeitstag = null;
+  for (const t of tage) {
+    if ((t.entries?.length ?? 0) > 0) letzterArbeitstag = t.date;
+  }
   /** @type {Record<string, number>} */
   const gruende = {};
   let summe = 0;
-  for (const t of plan.days ?? []) {
+  for (const t of tage) {
+    if (letzterArbeitstag && t.date > letzterArbeitstag) continue;
     for (const i of t.idle ?? []) {
       gruende[i.grund] = (gruende[i.grund] ?? 0) + 1;
       summe += 1;

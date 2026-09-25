@@ -185,14 +185,20 @@ test('Wirkungsanalyse: Personal hilft wenig, Schichtbetrieb viel', () => {
   mitLeihe(api, nurPersonal.id, 8, '2026-09-14');
   const a = api.impact(nurPersonal.id, 'BASELINE');
   /*
-   * Personal allein baut hier KEINE Verspaetung ab - es kostet sogar
-   * welche. Saege, Entgraten und Biegen gibt es nur je einmal; mehr Leute
-   * koennen dort nicht gleichzeitig arbeiten, binden aber Betreuung
-   * (5/3/1 h je Woche) und leisten in den ersten Wochen 40/60/80 %.
-   * Diese Aussage ist der eigentliche Wert der Wirkungsanalyse.
+   * Personal allein baut hier praktisch KEINE Verspaetung ab. Saege,
+   * Entgraten und Biegen gibt es nur je einmal; mehr Leute koennen dort
+   * nicht gleichzeitig arbeiten, binden aber Betreuung (5/3/1 h je Woche)
+   * und leisten in den ersten Wochen 40/60/80 %. Diese Aussage ist der
+   * eigentliche Wert der Wirkungsanalyse.
+   *
+   * Seit die Orbital-Aushilfe (24.09.2026) dort etwas Maschinenzeit
+   * freimacht, sickert ein kleiner Rest davon bis hierher durch (-17 von
+   * ueber 900 Verspaetungstagen) - die eigentliche Aussage (Personal
+   * bringt fast nichts, Schichtbetrieb ein Vielfaches davon) bleibt unten
+   * unveraendert bestehen.
    */
-  assert.ok(a.delta.totalLateDays >= 0,
-    `Personal allein darf keine Verspätung abbauen, war ${a.delta.totalLateDays}`);
+  assert.ok(a.delta.totalLateDays >= -20,
+    `Personal allein darf höchstens marginal Verspätung abbauen, war ${a.delta.totalLateDays}`);
   assert.equal(a.delta.otd, 0, 'die Termintreue bleibt unverändert');
 
   // Erst die längere Belegungszeit macht die Plätze frei

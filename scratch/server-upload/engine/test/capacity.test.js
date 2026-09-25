@@ -121,7 +121,8 @@ test('Kapazität: Orbital – Maschinen und Schweißer als getrennte Restriktion
   const d2 = dayCapacity(c2, MO);
   assert.equal(d2.resources.orbitalMachinesUsable, 6);
   assert.equal(d2.byOp.ORBITAL_KEHLNAHT.limiter, LIMITER.ORBITAL_MACHINE);
-  assert.equal(d2.byOp.ORBITAL_KEHLNAHT.capUnits, 3 * 7.5);
+  // 3 Schweißer x 7,5 h + Aushilfe (Rohrstücke rüsten/entnehmen: 1 x 0,5 x 7,5 h)
+  assert.equal(d2.byOp.ORBITAL_KEHLNAHT.capUnits, 3 * 7.5 + 3.75);
 });
 
 test('Kapazität: Mannstunden und Maschinenstunden bleiben getrennt (§54)', () => {
@@ -131,9 +132,11 @@ test('Kapazität: Mannstunden und Maschinenstunden bleiben getrennt (§54)', () 
     x.resources.welders = { default: 5, byWeekday: {}, byDate: {} };
   });
   const d = dayCapacity(c, MO).byOp.ORBITAL_KEHLNAHT;
-  assert.equal(d.capManHours, 22.5);                  // 3 Schweißer x 7,5 h
-  assert.equal(d.detail.machineHoursCapacity, 45);    // 6 Maschinen x 7,5 h
-  assert.equal(d.detail.machineHoursCapacity, d.capManHours * 2);
+  // 3 Schweißer x 7,5 h + Aushilfe (1 x 0,5 x 7,5 h), da hier die Maschinen limitieren
+  assert.equal(d.capManHours, 26.25);
+  assert.equal(d.detail.machineHoursCapacity, 45);    // 6 Maschinen x 7,5 h - von der Aushilfe unberührt
+  // Die reine Maschinenrestriktion (vor Aushilfe) bleibt im 2:1-Verhältnis zu den Maschinenstunden
+  assert.equal(d.detail.machineHoursCapacity, d.detail.machineCapManHours * 2);
 });
 
 test('Kapazität: Betriebszeitfenster verlängert nur die Platzbelegung, nicht die Arbeitszeit', () => {

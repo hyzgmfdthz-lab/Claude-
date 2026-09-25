@@ -731,8 +731,20 @@ export function dayCapacity(config, date) {
      * sie wird dann auch nicht ausgewiesen.
      */
     const hilfe = aushilfeVon(config, op.id);
+    /*
+     * Orbital (Nutzerauftrag 24.09.2026, "die 2 MA gehen notfalls als
+     * Helfer bei einem anderen Arbeitsgang unterstützen"): nur wenn die
+     * MASCHINEN die Grenze sind, nicht wenn die eingesetzten Schweißer
+     * fehlen (ORBITAL_WELDER) - das ist die Mannschaft selbst, dagegen
+     * hilft ein ungelernter Helfer nachweislich nichts (siehe Kommentar
+     * oben bei "Aushilfe: Sie hebt die PLATZgrenze, nicht die Mannschaft").
+     * Ein Helfer kann Rohrstücke ruesten/entnehmen, waehrend der
+     * Schweißer nur schweißt - das verkuerzt die Maschinenbelegung je
+     * Naht, genau wie bei Hydro/Endkontrolle.
+     */
     const plaetzeBegrenzen = limiter === LIMITER.WORKPLACE || limiter === LIMITER.HYDRO_STATION
-      || limiter === LIMITER.BEIZ_STATION || limiter === LIMITER.HEFTPLATZ;
+      || limiter === LIMITER.BEIZ_STATION || limiter === LIMITER.HEFTPLATZ
+      || limiter === LIMITER.ORBITAL_MACHINE;
     if (hilfe && plaetzeBegrenzen && capUnits > 0) {
       const zusatz = hilfe.max * hilfe.leistung * opWindow * prod;
       detail.aushilfe = {
