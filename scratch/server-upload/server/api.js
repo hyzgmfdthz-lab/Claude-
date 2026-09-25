@@ -1138,7 +1138,8 @@ export function createApi(store, options = {}) {
       const input = materialize(dataset, scenarioId || dataset.activeScenarioId);
       if (peopleOf(input.config).length === 0) return null;
       const result = runSchedule(input);
-      const plan = assignPeople(result, input.config, range);
+      const plan = assignPeople(result, input.config, range,
+        { projects: input.projects, templates: input.templates });
       return {
         planningDate: input.config.planningDate,
         weeks: [...new Set(plan.days.map((d) => d.weekKey))],
@@ -1170,7 +1171,8 @@ export function createApi(store, options = {}) {
       const result = runSchedule(input);
       const person = opts.mode === BOARD_MODE.PERSON;
       const plan = person && peopleOf(input.config).length > 0
-        ? assignPeople(result, input.config, { from: opts.from, to: opts.to })
+        ? assignPeople(result, input.config, { from: opts.from, to: opts.to },
+          { projects: input.projects, templates: input.templates })
         : null;
       return board(input, result, { ...opts, assignment: plan });
     },
@@ -1225,7 +1227,8 @@ export function createApi(store, options = {}) {
     personPlan(scenarioId, personId, weekKey) {
       const input = materialize(dataset, scenarioId || dataset.activeScenarioId);
       if (peopleOf(input.config).length === 0) return null;
-      const plan = assignPeople(runSchedule(input), input.config);
+      const plan = assignPeople(runSchedule(input), input.config, {},
+        { projects: input.projects, templates: input.templates });
       const wk = weekKey || plan.days[0]?.weekKey;
       return { personId, weekKey: wk, days: personWeek(plan, personId, wk) };
     },
@@ -1900,9 +1903,11 @@ export function createApi(store, options = {}) {
       return {
         ...vorschlag,
         /** Wirkung auf den Einsatzplan: wer stand vorher ohne Platz da? */
-        leerlaufVorher: leerlaufSumme(assignPeople(resultVorher, basis.config, {})),
+        leerlaufVorher: leerlaufSumme(assignPeople(resultVorher, basis.config, {},
+          { projects: basis.projects, templates: basis.templates })),
         leerlaufNachher: konfigNachher
-          ? leerlaufSumme(assignPeople(planeDurch({ ...basis, config: konfigNachher }), konfigNachher, {}))
+          ? leerlaufSumme(assignPeople(planeDurch({ ...basis, config: konfigNachher }), konfigNachher, {},
+            { projects: basis.projects, templates: basis.templates }))
           : null,
       };
     },

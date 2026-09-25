@@ -671,7 +671,7 @@ function diagnose(st, ctx, projectManRest) {
  * @param {any} op @param {any} project @param {any} rel Ergebnis von releaseInfo
  * @returns {string|null}
  */
-function opReleaseDate(op, project, rel) {
+export function opReleaseDate(op, project, rel) {
   if (op.releaseWeeksBeforeDue == null || !project.dueDate) return rel.release;
   const own = addWeeks(project.dueDate, -Number(op.releaseWeeksBeforeDue));
   /*

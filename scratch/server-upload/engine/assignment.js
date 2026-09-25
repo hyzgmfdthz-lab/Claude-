@@ -46,14 +46,18 @@ import { OPERATION_BY_ID, round2 } from './model.js';
 import { peopleOf, personPresent, absenceOn, personEffectiveFactor } from './team.js';
 import { placesFor, workersPerPlace, DAY_KIND, LIMITER_LABEL } from './capacity.js';
 import { schichtenJeArbeitsgangWoche, wochenSchichten, SCHICHT_STUNDEN } from './schichtplan.js';
-import { weekKey } from './calendar.js';
+import { weekKey, cmpDate } from './calendar.js';
+import { resolveRouting } from './routing.js';
+import { releaseInfo, opReleaseDate } from './scheduler.js';
 
 /**
  * @param {any} result Ergebnis von runSchedule
  * @param {any} config
  * @param {{from?:string, to?:string}} [range] Zeitraum (leer = alles)
+ * @param {{projects?:any[], templates?:any}} [extra] Fuer den Vorzug (siehe unten) -
+ *   ohne diese beiden Felder bleibt der Vorzug inaktiv (sicherer Normalfall).
  */
-export function assignPeople(result, config, range = {}) {
+export function assignPeople(result, config, range = {}, extra = {}) {
   const people = peopleOf(config);
   const tage = [];
   /** @type {Record<string, any>} */
@@ -69,8 +73,18 @@ export function assignPeople(result, config, range = {}) {
   let offen = 0;
 
   const capOf = new Map(result.daySeries.map((d) => [d.date, d]));
+  /*
+   * Eigene Kopien der Allokationen - nicht `result.allocations` selbst.
+   * Der Vorzug unten (siehe dort) zieht Stunden von einem spaeteren Tag ab,
+   * sobald sie heute vergeben werden - `result` ist aber die Terminierung
+   * und darf fuer andere, spaetere Aufrufe (z. B. eine zweite Anzeige mit
+   * anderem Zeitraum) unveraendert bleiben.
+   */
+  const allocationsKlon = (result.allocations ?? []).map((a) => ({ ...a }));
   const alloc = new Map();
-  for (const a of result.allocations) {
+  const allocUngefiltert = new Map();
+  for (const a of allocationsKlon) {
+    (allocUngefiltert.get(a.date) ?? allocUngefiltert.set(a.date, []).get(a.date)).push(a);
     if (range.from && a.date < range.from) continue;
     if (range.to && a.date > range.to) continue;
     (alloc.get(a.date) ?? alloc.set(a.date, []).get(a.date)).push(a);
@@ -95,6 +109,59 @@ export function assignPeople(result, config, range = {}) {
     .map((d) => d.date);
 
   const projectName = new Map((result.projects ?? []).map((p) => [p.id, p.orderNo ?? p.id]));
+
+  /*
+   * Vorzug (Nutzeranforderung 25.09.2026: "Es kann nicht sein, dass ein MA
+   * keine Arbeit hat, weil die Arbeit des Tages vergeben ist. Dann muss
+   * Arbeit vom Folgetag vorgezogen werden."): Vorbereitung fuer die
+   * eigentliche Vergabe weiter unten (siehe dort). Geprueft wird NICHT nur
+   * das Freigabedatum, sondern zusaetzlich, ob ALLE Vorgaenger-Arbeitsgaenge
+   * dieses Auftrags schon VOR heute vollstaendig eingeplant sind (keine
+   * eigene Allokation mehr an oder nach dem Zieltag) - sonst koennte
+   * vorgezogene Arbeit auf einem Vorgaenger aufbauen, der bei einer echten
+   * Terminierung erst heute oder morgen fertig wuerde. Ohne diese Pruefung
+   * waere ein Vorzug ein Terminierungsfehler, kein Komfortgewinn.
+   */
+  const projectById = new Map((extra.projects ?? []).map((p) => [p.id, p]));
+  /** @type {Map<string, any>} */
+  const routingCache = new Map();
+  /** @type {Map<string, string|null>} (opId|projectId) -> fruehestes Freigabedatum */
+  const freigabeCache = new Map();
+  /** @type {Map<string, string>} (projectId|opId) -> spaetestes Allokationsdatum */
+  const letzteAllokation = new Map();
+  if (extra.projects && extra.templates) {
+    for (const a of allocationsKlon) {
+      const schluessel = `${a.projectId}|${a.opId}`;
+      const bisher = letzteAllokation.get(schluessel);
+      if (!bisher || a.date > bisher) letzteAllokation.set(schluessel, a.date);
+    }
+  }
+  /** @param {string} opId @param {string} projectId @param {string} heute */
+  const heuteVorziehbar = (opId, projectId, heute) => {
+    if (!extra.projects || !extra.templates) return false;
+    const project = projectById.get(projectId);
+    if (!project) return false;
+    let routing = routingCache.get(projectId);
+    if (routing === undefined) {
+      try { routing = resolveRouting(project, extra.templates, config); } catch { routing = null; }
+      routingCache.set(projectId, routing);
+    }
+    const op = routing?.ops.find((o) => o.opId === opId);
+    if (!op) return false;
+    const freigabeKey = `${opId}|${projectId}`;
+    let freigabe = freigabeCache.get(freigabeKey);
+    if (freigabe === undefined) {
+      const rel = releaseInfo(project, config);
+      freigabe = opReleaseDate(op, project, rel);
+      freigabeCache.set(freigabeKey, freigabe);
+    }
+    if (!freigabe || cmpDate(freigabe, heute) > 0) return false;
+    for (const vorgaenger of op.predecessors ?? []) {
+      const letzte = letzteAllokation.get(`${projectId}|${vorgaenger.opId}`);
+      if (letzte && cmpDate(letzte, heute) >= 0) return false;
+    }
+    return true;
+  };
 
   /** Wartende Arbeit je Tag - fuer die Begruendung "warum bekomme ich nichts" */
   /** @type {Map<string, any[]>} */
@@ -150,7 +217,8 @@ export function assignPeople(result, config, range = {}) {
     return v;
   };
 
-  for (const date of arbeitstage) {
+  for (let dateIdx = 0; dateIdx < arbeitstage.length; dateIdx++) {
+    const date = arbeitstage[dateIdx];
     const list = alloc.get(date) ?? [];
     const day = capOf.get(date);
     const hoursPerEmployee = Number(day?.hoursPerEmployee ?? 7.5) || 7.5;
@@ -423,6 +491,97 @@ export function assignPeople(result, config, range = {}) {
             hauptgrund,
             jeSchicht,
           });
+        }
+      }
+    }
+
+    /*
+     * Vorzug: wer nach alldem noch Restbudget hat, bekommt Arbeit von einem
+     * SPAETEREN Tag vorgezogen - aber nur, wenn `heuteVorziehbar` (siehe
+     * oben) das fuer genau diesen Arbeitsgang/Auftrag bestaetigt (Freigabe
+     * UND alle Vorgaenger schon vor heute erledigt). Es wird von den
+     * naechsten Tagen zuerst genommen (kein wilder Griff Wochen voraus),
+     * und die Platzgrenze der EIGENEN Schicht gilt genauso wie oben - ein
+     * Vorzug darf keinen Platz ueberbelegen.
+     */
+    const VORZUG_FENSTER_TAGE = 5;
+    if (extra.projects && extra.templates) {
+      /*
+       * Die Platzgrenze allein reicht nicht - sie prueft nur "wie viele
+       * GLEICHZEITIG", nicht "wie viel INSGESAMT der Platz heute leisten
+       * kann". Ohne eigene Deckelung wuerde der Vorzug so viele Leute
+       * nacheinander an denselben Platz lassen, wie Restbudget da ist -
+       * weit ueber das hinaus, was die Terminierung fuer diesen
+       * Arbeitsgang HEUTE ueberhaupt an Kapazitaet vorsieht (z. B. eine
+       * einzelne Saege mit 7,5 h Tageskapazitaet, aber zehn Personentage
+       * vorgezogen). Deshalb wird je Arbeitsgang die noch freie
+       * Tageskapazitaet (Kapazitaet minus schon heute genutzt) mitgefuehrt
+       * und bei jedem Vorzug abgezogen - dieselbe Groesse, die auch die
+       * Terminierung selbst als Grenze fuer den Tag kennt.
+       */
+      /** @type {Record<string, number>} */
+      const freiJeOp = {};
+      const freiFuer = (opId) => {
+        if (!(opId in freiJeOp)) {
+          const b = day?.byOp?.[opId];
+          freiJeOp[opId] = Math.max(0, round2((b?.capManHours ?? 0) - (b?.usedManHours ?? 0)));
+        }
+        return freiJeOp[opId];
+      };
+      for (const p of anwesend) {
+        const meineSchicht = schichtVon[p.id] ?? 1;
+        for (let voraus = 1; voraus <= VORZUG_FENSTER_TAGE && (rest[p.id] ?? 0) > 0.01; voraus++) {
+          const zielIdx = dateIdx + voraus;
+          if (zielIdx >= arbeitstage.length) break;
+          const zielDatum = arbeitstage[zielIdx];
+          /*
+           * Mindestgroesse fuer einen Vorzug (Nutzeranforderung erfuellt,
+           * aber nicht um jeden Preis brauchbar): ohne Untergrenze wuerde
+           * ein Restbudget von wenigen Minuten das letzte bisschen einer
+           * fremden Position abgreifen - am Ende steht dann eine Person
+           * mit einem Dutzend Mini-Schnipseln aus verschiedenen Auftraegen
+           * im Plan, statt EINER sinnvollen Zusatzaufgabe. 0,5 h ist
+           * dieselbe Rueckstandsschwelle, die auch `planeSchichten` fuer
+           * "das zaehlt als echter Rueckstand" verwendet.
+           */
+          const MINDESTBLOCK = 0.5;
+          const kandidaten = (allocUngefiltert.get(zielDatum) ?? [])
+            .filter((a) => a.manHours > 0.01 && p.skills?.[a.opId] && freiFuer(a.opId) > 0.01
+              && Math.floor(schichtenJeOp[a.opId] ?? 1) >= meineSchicht
+              && heuteVorziehbar(a.opId, a.projectId, date))
+            .sort((x, y) => y.manHours - x.manHours);
+          for (const a of kandidaten) {
+            if ((rest[p.id] ?? 0) <= 0.01) break;
+            const gruppe = OPERATION_BY_ID[a.opId]?.capacityGroup ?? a.opId;
+            const drauf = (personenAn[`${gruppe}#${meineSchicht}`] ??= new Set());
+            const plaetzeJeSchicht = plaetzeAm(config, a.opId, day);
+            const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
+            if (!drauf.has(p.id) && belegt >= plaetzeJeSchicht) continue;
+            const nimm = round2(Math.min(rest[p.id], a.manHours, freiFuer(a.opId)));
+            if (nimm < MINDESTBLOCK && nimm < (rest[p.id] ?? 0) - 0.01) continue;
+            if (nimm <= 0.01) continue;
+            drauf.add(p.id);
+            (heuteAn[p.id] ??= []).push(a.opId);
+            rest[p.id] = round2(rest[p.id] - nimm);
+            freiJeOp[a.opId] = round2(freiJeOp[a.opId] - nimm);
+            // Von der ZIEL-Allokation (spaeterer Tag) abziehen - keine doppelte Zaehlung.
+            a.manHours = round2(a.manHours - nimm);
+            eintraege.push({
+              personId: p.id, opId: a.opId, opName: OPERATION_BY_ID[a.opId]?.name ?? a.opId,
+              projectId: a.projectId,
+              orderNo: projectName.get(a.projectId) ?? a.projectId,
+              hours: nimm,
+              schicht: meineSchicht,
+              /** Vorgezogen von einem spaeteren Tag, siehe Kommentar oben */
+              vorgezogen: true,
+              vonDatum: zielDatum,
+            });
+            const bp = byPerson[p.id];
+            bp.hours = round2(bp.hours + nimm);
+            bp.byOp[a.opId] = round2((bp.byOp[a.opId] ?? 0) + nimm);
+            const wk = weekKey(date);
+            bp.byWeek[wk] = round2((bp.byWeek[wk] ?? 0) + nimm);
+          }
         }
       }
     }
