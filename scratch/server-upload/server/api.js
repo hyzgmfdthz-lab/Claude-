@@ -15,7 +15,7 @@ import {
   passwordProblem, createSession, tokenHashOf, SESSION_HOURS, ADMIN_USER,
   parseRuleText, checkRules, ruleSummary, hasError, emptyRule, RULE_TYPES,
   assignPeople, personWeek, defaultTeam, peopleOf, teamOn, ZUGESAGTE_LEIHE,
-  planeSchichten, stundenFuer, schichtenJeArbeitsgang,
+  planeSchichten, stundenFuer, schichtenJeArbeitsgang, schichtenJeArbeitsgangWoche,
   computeDemand, aggregateWeeks, dashboardKpis, cmpDate,
   SHIFTS, ABSENCE_KINDS, SKILL_LEVELS,
   weekList,
@@ -216,7 +216,7 @@ export function createApi(store, options = {}) {
         if (letzterArbeitstag && t.date > letzterArbeitstag) continue;
         for (const i of t.idle ?? []) if (i.schicht > 1 && i.grund === 'SCHICHT_OHNE_ARBEIT') reibung++;
       }
-      return { verspaetung, reibung };
+      return { verspaetung, reibung, plan, letzterArbeitstag };
     };
     const NACHSCHLIFF_TOLERANZ_TAGE = 2;
     if (Object.keys(aenderungenJeOp).length > 0) {
@@ -246,6 +246,82 @@ export function createApi(store, options = {}) {
         }
         if (!etwasEntfernt) break;
       }
+    }
+
+    /*
+     * Ergaenzung: wer trotz allem ohne passende Arbeit dasteht ("Schicht
+     * ohne Arbeit" - z. B. weil "keiner darf alleine arbeiten" mehr Leute
+     * in eine Schicht zwingt, als es dort qualifizierte gibt), bekommt
+     * wenn moeglich einen EIGENEN Arbeitsgang fuer GENAU DIESE EINE WOCHE
+     * einen Grad hoeher gesetzt - wenn dafuer wirklich zu ihm passende
+     * Arbeit wartet UND das die Verspaetung nicht verschlechtert.
+     * Nutzeranfrage 25.09.2026: "es sollte die beste Option genutzt
+     * werden" (genannt: Hydroprüfung, Entgraten, ein dritter Heftplatz,
+     * ein zweiter Sägeplatz - alles Arbeitsgänge, an denen die Person
+     * bereits qualifiziert waere, wenn die Schicht dort liefe).
+     *
+     * Wie beim Nachschliff oben: getestet wird erst NACH der Konvergenz,
+     * am fertigen Ergebnis - nicht in der Kandidatensuche selbst, aus
+     * demselben Grund (eine Aenderung mitten in der Suche verschiebt
+     * deren ganzen weiteren Verlauf, siehe Nachschliff-Kommentar oben).
+     * Von mehreren moeglichen Arbeitsgaengen wird je Woche nur die BESTE
+     * Option uebernommen (wenigste verbleibende Reibung, bei Gleichstand
+     * die kleinere Verspaetung) - dann neu bewertet, bis nichts mehr
+     * hilft oder die Rundenobergrenze erreicht ist.
+     */
+    for (let ergaenzungRunde = 0; ergaenzungRunde < 5; ergaenzungRunde++) {
+      const { verspaetung: besteVerspaetung, reibung: besteReibung, plan: bestePlan, letzterArbeitstag }
+        = bewerten(config);
+      if (besteReibung === 0) break;
+      /** @type {Map<string, {wk:string, schicht:number, ops:Set<string>}>} Schluessel: Woche|Schicht */
+      const betroffen = new Map();
+      for (const t of bestePlan.days) {
+        if (letzterArbeitstag && t.date > letzterArbeitstag) continue;
+        for (const idle of t.idle ?? []) {
+          if (idle.schicht <= 1 || idle.grund !== 'SCHICHT_OHNE_ARBEIT') continue;
+          const schluessel = `${t.weekKey}|${idle.schicht}`;
+          const e = betroffen.get(schluessel) ?? { wk: t.weekKey, schicht: idle.schicht, ops: new Set() };
+          for (const opId of idle.arbeitsgaenge ?? []) e.ops.add(opId);
+          betroffen.set(schluessel, e);
+        }
+      }
+      if (betroffen.size === 0) break;
+
+      let bestKandidat = null;
+      for (const { wk, schicht, ops } of betroffen.values()) {
+        const aktuell = schichtenJeArbeitsgangWoche(config, wk);
+        for (const opId of ops) {
+          if (Math.floor(aktuell[opId] ?? 1) >= schicht) continue; // laeuft dort schon
+          const bestehend = aenderungenJeOp[opId];
+          const basisLevel = schichtenJeArbeitsgang(basis.config)[opId] ?? 1;
+          const nach = Math.max(bestehend?.nach ?? basisLevel, schicht);
+          const probe = {
+            ...aenderungenJeOp,
+            [opId]: {
+              opId,
+              name: OPERATION_BY_ID[opId]?.name ?? opId,
+              von: bestehend?.von ?? basisLevel,
+              nach,
+              stundenNach: stundenFuer(nach),
+              wochen: { ...(bestehend?.wochen ?? {}), [wk]: schicht },
+            },
+          };
+          const configProbe = konfigAus(probe);
+          const { verspaetung: verspaetungProbe, reibung: reibungProbe } = bewerten(configProbe);
+          if (verspaetungProbe > besteVerspaetung) continue; // darf Termine nicht verschlechtern
+          if (reibungProbe >= besteReibung) continue; // muss wirklich etwas bringen
+          if (!bestKandidat || reibungProbe < bestKandidat.reibung
+            || (reibungProbe === bestKandidat.reibung && verspaetungProbe < bestKandidat.verspaetung)) {
+            bestKandidat = {
+              opId, eintrag: probe[opId], config: configProbe,
+              verspaetung: verspaetungProbe, reibung: reibungProbe,
+            };
+          }
+        }
+      }
+      if (!bestKandidat) break;
+      aenderungenJeOp[bestKandidat.opId] = bestKandidat.eintrag;
+      config = bestKandidat.config;
     }
 
     const aenderungen = Object.values(aenderungenJeOp);
