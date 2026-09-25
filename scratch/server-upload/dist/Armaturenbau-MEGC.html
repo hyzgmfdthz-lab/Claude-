@@ -23677,13 +23677,42 @@ function wochenSchichten(config, wochen, personen) {
       ? (wocheIndex * Math.max(1, grenzenRest[0])) % reihe.length
       : 0;
     const gedreht = [...reihe.slice(versatz), ...reihe.slice(0, versatz)];
-    let i = 0;
-    for (let sn = 1; sn <= maxSchichten; sn++) {
+    /*
+     * Wer darf ueberhaupt an einem Arbeitsgang, der diese Woche in Schicht
+     * sn oder hoeher laeuft? Nutzerpruefung 25.09.2026: TOBE und VOLODYMYR
+     * SOVA standen in Schicht 3, obwohl in dieser Woche keiner ihrer
+     * Arbeitsgaenge dreischichtig lief - die Rotation hatte sie rein nach
+     * Kuerzel einsortiert, ohne zu pruefen, ob es fuer sie dort ueberhaupt
+     * etwas zu tun gibt ("Schicht ohne Arbeit"). Eine Person ohne
+     * passenden Arbeitsgang gewinnt durch die Nachtschicht nichts - sie
+     * blockiert nur den Platz fuer jemanden, der dort wirklich gebraucht
+     * wird.
+     */
+    const qualifiziertFuerSchicht = (p, sn) => Object.entries(schichten)
+      .some(([opId, n]) => Math.floor(n) >= sn && p.skills?.[opId]);
+    /*
+     * Von der hoechsten Schicht abwaerts besetzen (spiegelt Schritt 2 oben:
+     * die spaeten/dritten Schichten sind die knappen). Aus dem noch
+     * uebrigen, rotierten Rest zuerst, wer dort ueberhaupt etwas darf -
+     * die Reihenfolge INNERHALB der beiden Gruppen bleibt die rotierte
+     * (stabiler Sort), die wochenweise Fairness bleibt also erhalten.
+     */
+    let verbleibend = gedreht;
+    for (let sn = maxSchichten; sn >= 2; sn--) {
       const n = grenzenRest[sn - 1] ?? 0;
-      for (let k = 0; k < n && i < gedreht.length; k++, i++) derWoche[gedreht[i].id] = sn;
+      if (n <= 0) continue;
+      verbleibend = [...verbleibend].sort((a, b) => {
+        const qa = qualifiziertFuerSchicht(a, sn) ? 0 : 1;
+        const qb = qualifiziertFuerSchicht(b, sn) ? 0 : 1;
+        return qa - qb;
+      });
+      for (let k = 0; k < n && verbleibend.length > 0; k++) {
+        const p = verbleibend.shift();
+        derWoche[p.id] = sn;
+      }
     }
     /* Wer uebrig bleibt, geht in die Fruehschicht - dort ist immer Arbeit */
-    for (; i < gedreht.length; i++) derWoche[gedreht[i].id] = 1;
+    for (const p of verbleibend) derWoche[p.id] = 1;
     zuordnung[wk] = derWoche;
   });
 
