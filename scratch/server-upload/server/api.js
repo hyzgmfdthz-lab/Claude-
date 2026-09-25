@@ -15,7 +15,7 @@ import {
   passwordProblem, createSession, tokenHashOf, SESSION_HOURS, ADMIN_USER,
   parseRuleText, checkRules, ruleSummary, hasError, emptyRule, RULE_TYPES,
   assignPeople, personWeek, defaultTeam, peopleOf, teamOn, ZUGESAGTE_LEIHE,
-  planeSchichten, stundenFuer,
+  planeSchichten, stundenFuer, schichtenJeArbeitsgang,
   computeDemand, aggregateWeeks, dashboardKpis, cmpDate,
   SHIFTS, ABSENCE_KINDS, SKILL_LEVELS,
   weekList,
@@ -168,6 +168,86 @@ export function createApi(store, options = {}) {
       }
       config = deepMerge(config, vorschlag.patch);
     }
+    /** Baut aus einer Teilmenge der Aenderungen eine Konfiguration. */
+    const konfigAus = (map) => {
+      const teil = Object.values(map);
+      if (teil.length === 0) return basis.config;
+      return deepMerge(basis.config, {
+        resources: {
+          byOperation: Object.fromEntries(teil.map((a) => [a.opId, {
+            operatingHoursByWeek: Object.fromEntries(
+              Object.entries(a.wochen).map(([wk, n]) => [wk, stundenFuer(n)])),
+          }])),
+        },
+      });
+    };
+
+    /*
+     * Nachschliff: Schichten wieder herausnehmen, die im ENDSTAND kaum noch
+     * etwas retten, aber Leute ohne passende Arbeit in eine ganze
+     * Zusatzschicht zwingen ("Schicht ohne Arbeit").
+     *
+     * `planeSchichten` sieht das nicht - es rechnet nur Termine, nicht
+     * Personen (dafuer muesste es `assignPeople` je Kandidat aufrufen, das
+     * waere in der Kandidatensuche selbst zu teuer und, wie die
+     * Nutzerpruefung 25.09.2026 zeigte, auch gefaehrlich: eine hoehere
+     * Huerde MITTEN in der Kandidatensuche aendert die Reihenfolge, in der
+     * Kandidaten getestet werden, und damit den ganzen weiteren Verlauf -
+     * in der Probe wurde dadurch das Ergebnis nicht schlanker, sondern
+     * gleichzeitig schlechter UND unruhiger (311 -> 331 Verspaetungstage,
+     * 17 -> 25 mal Schicht ohne Arbeit).
+     *
+     * Deshalb erst NACH der Konvergenz, am fertigen Ergebnis: jede
+     * angenommene Schicht wird einzeln testweise wieder herausgenommen.
+     * Kostet das Herausnehmen nur wenig Termintreue (hoechstens 2 Tage) und
+     * baut es tatsaechlich "Schicht ohne Arbeit" ab, bleibt sie draussen -
+     * sonst bleibt sie drin. Das aendert nichts an der Suche selbst, nur an
+     * der fertigen Auswahl.
+     */
+    /** Terminierung einmal rechnen, Verspaetung und Reibung daraus ablesen - keine doppelte Simulation. */
+    const bewerten = (cfg) => {
+      const result = planeDurch({ ...basis, config: cfg });
+      const verspaetung = verspaetungImFenster({ ...basis, config: cfg }, result);
+      const plan = assignPeople(result, cfg, {});
+      let letzterArbeitstag = null;
+      for (const t of plan.days) if ((t.entries?.length ?? 0) > 0) letzterArbeitstag = t.date;
+      let reibung = 0;
+      for (const t of plan.days) {
+        if (letzterArbeitstag && t.date > letzterArbeitstag) continue;
+        for (const i of t.idle ?? []) if (i.schicht > 1 && i.grund === 'SCHICHT_OHNE_ARBEIT') reibung++;
+      }
+      return { verspaetung, reibung };
+    };
+    const NACHSCHLIFF_TOLERANZ_TAGE = 2;
+    if (Object.keys(aenderungenJeOp).length > 0) {
+      let { verspaetung: besteVerspaetung, reibung: besteReibung } = bewerten(config);
+      /*
+       * Ein einzelner Durchlauf reicht nicht immer: manche Arbeitsgaenge
+       * sind erst GEMEINSAM ueberfluessig - einzeln fuer sich, waehrend der
+       * jeweils andere noch drinsteht, kostet die Ruecknahme noch mehr als
+       * die Toleranz erlaubt. Deshalb wird wiederholt, bis eine Runde
+       * nichts mehr findet - mit derselben Rundenobergrenze wie die
+       * Konvergenz oben.
+       */
+      for (let nachschliffRunde = 0; nachschliffRunde < 5; nachschliffRunde++) {
+        let etwasEntfernt = false;
+        for (const opId of Object.keys(aenderungenJeOp)) {
+          const probe = { ...aenderungenJeOp };
+          delete probe[opId];
+          const configOhne = konfigAus(probe);
+          const { verspaetung: verspaetungOhne, reibung: reibungOhne } = bewerten(configOhne);
+          if (verspaetungOhne - besteVerspaetung <= NACHSCHLIFF_TOLERANZ_TAGE && reibungOhne < besteReibung) {
+            delete aenderungenJeOp[opId];
+            config = configOhne;
+            besteVerspaetung = verspaetungOhne;
+            besteReibung = reibungOhne;
+            etwasEntfernt = true;
+          }
+        }
+        if (!etwasEntfernt) break;
+      }
+    }
+
     const aenderungen = Object.values(aenderungenJeOp);
     const patch = aenderungen.length > 0
       ? {
@@ -189,12 +269,22 @@ export function createApi(store, options = {}) {
     const verspaetungNachherFenster = aenderungen.length > 0
       ? verspaetungImFenster({ ...basis, config }, planeDurch({ ...basis, config }))
       : verspaetungVorherFenster;
+    /*
+     * `letzter.schichten` stammt aus der letzten Konvergenzrunde und kennt
+     * den Nachschliff oben nicht - ein dort wieder herausgenommener
+     * Arbeitsgang wuerde hier sonst weiter als hochgesetzt angezeigt,
+     * obwohl `patch`/`aenderungen` ihn schon nicht mehr enthalten. Deshalb
+     * wird die Anzeige aus dem tatsaechlichen Endstand neu gebaut.
+     */
+    const schichtenEndstand = { ...schichtenJeArbeitsgang(basis.config) };
+    for (const a of aenderungen) schichtenEndstand[a.opId] = a.nach;
     return {
       basis,
       resultVorher,
       konfigNachher: aenderungen.length > 0 ? config : null,
       vorschlag: {
         ...letzter,
+        schichten: schichtenEndstand,
         aenderungen,
         patch,
         stauVorher,
