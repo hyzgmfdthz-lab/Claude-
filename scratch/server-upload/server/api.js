@@ -15,7 +15,8 @@ import {
   passwordProblem, createSession, tokenHashOf, SESSION_HOURS, ADMIN_USER,
   parseRuleText, checkRules, ruleSummary, hasError, emptyRule, RULE_TYPES,
   assignPeople, personWeek, defaultTeam, peopleOf, teamOn, ZUGESAGTE_LEIHE,
-  planeSchichten, mitSchichten,
+  planeSchichten, stundenFuer,
+  computeDemand, aggregateWeeks, dashboardKpis, cmpDate,
   SHIFTS, ABSENCE_KINDS, SKILL_LEVELS,
   weekList,
   parseAttendanceMatrix, absentPerDay, absentPerWeek,
@@ -81,6 +82,127 @@ export function createApi(store, options = {}) {
     autoStateIfDue();
     store.save(dataset, label ? `${label}${actor.name ? ` – ${actor.name}` : ''}` : '');
   };
+
+  /**
+   * Verspaetungstage im ausgewaehlten Zeitraum - dieselbe Rechnung wie
+   * `analyze()` (siehe engine/index.js), nur ohne dafuer ein echtes
+   * Dataset-Szenario zu brauchen.
+   *
+   * `planeSchichten` selbst rechnet mit der Rohsumme ueber ALLE Projekte
+   * (`verspaetung()` in schichtplan.js) - fuer die interne Suche voellig
+   * ausreichend (Rohsumme UND Fensterwert bewegen sich fuer denselben
+   * Rueckstand gleichsinnig). Der Vorschlag, der dem Anwender gezeigt
+   * wird, muss aber exakt das treffen, was `api.analysis()` fuer das
+   * uebernommene Szenario nachher zeigt - sonst haelt das Versprechen
+   * "Verspaetung X -> Y Tage" nicht (Nutzerpruefung 25.09.2026: bei der
+   * wochenweisen Verfeinerung wich die Rohsumme erstmals sichtbar vom
+   * Fensterwert ab, 279 zu 311 Tagen bei identischer Konfiguration).
+   * @param {any} input @param {any} result
+   */
+  function verspaetungImFenster(input, result) {
+    const demand = computeDemand(input, result.dates);
+    const weeks = aggregateWeeks(result.daySeries, demand);
+    let lastRelevant = null;
+    for (const p of result.projects) {
+      const d = p.forecastFinish || p.dueDate;
+      if (d && (!lastRelevant || cmpDate(d, lastRelevant) > 0)) lastRelevant = d;
+    }
+    lastRelevant ??= result.horizonEnd;
+    let letzterTermin = null;
+    for (const p of result.projects) {
+      if (!p.dueDate) continue;
+      if (Number(p.remainingManHours ?? 0) <= 0) continue;
+      if (!letzterTermin || cmpDate(p.dueDate, letzterTermin) > 0) letzterTermin = p.dueDate;
+    }
+    const from = input.config.planningDate;
+    const to = letzterTermin ?? lastRelevant;
+    const kpisImFenster = dashboardKpis(result, Object.fromEntries(
+      Object.entries(weeks).filter(([, w]) => cmpDate(w.from, to) <= 0 && cmpDate(w.to ?? w.from, from) >= 0)),
+    { from, to });
+    return kpisImFenster.totalLateDays;
+  }
+
+  /**
+   * Schichtvorschlag bis zur Konvergenz.
+   *
+   * `planeSchichten` liefert einen einzelnen, in sich verifizierten Vorschlag
+   * - jeder angenommene Schritt ist gegen eine volle Neuterminierung
+   * geprueft. Bei eng gekoppelten Engpaessen (Nutzerpruefung 25.09.2026: ein
+   * Arbeitsgang zeigt erst dann noch eigenen Nutzen, wenn ein anderer schon
+   * hochgesetzt ist) kann EIN Durchlauf trotzdem nicht alles auf einmal
+   * finden. Deshalb wird hier iteriert: nach jeder Runde wird der Stand
+   * KOMPLETT NEU aus dem Datenbestand hergeleitet (nicht nur der interne
+   * Zwischenstand von `planeSchichten` weitergereicht) - das umgeht jede
+   * Unschaerfe zwischen "was die Konfiguration wochenweise sagt" und "was
+   * `planeSchichten` intern noch als flachen Ausgangswert kennt". Iteriert
+   * wird, bis eine Runde nichts mehr findet oder eine Obergrenze erreicht
+   * ist (mehr als fuenf echte Zusatzrunden waeren fuer eine Werkstatt mit
+   * gut einem Dutzend Arbeitsgaengen unplausibel).
+   * @param {string} quelle Szenario-ID
+   */
+  function vorschlagKonvergent(quelle) {
+    const basis = materialize(dataset, quelle);
+    const resultVorher = planeDurch(basis);
+    let config = basis.config;
+    /** @type {Record<string, any>} */
+    const aenderungenJeOp = {};
+    let letzter = null;
+    let verspaetungVorher = null;
+    let stauVorher = null;
+    for (let runde = 0; runde < 5; runde++) {
+      const input = { ...basis, config };
+      const result = runde === 0 ? resultVorher : planeDurch(input);
+      const vorschlag = planeSchichten(input, result, (c) => planeDurch({ ...input, config: c }));
+      if (verspaetungVorher == null) { verspaetungVorher = vorschlag.verspaetungVorher; stauVorher = vorschlag.stauVorher; }
+      letzter = vorschlag;
+      if (!vorschlag.patch) break;
+      for (const a of vorschlag.aenderungen) {
+        const bestehend = aenderungenJeOp[a.opId];
+        if (bestehend) {
+          bestehend.nach = Math.max(bestehend.nach, a.nach);
+          bestehend.stundenNach = stundenFuer(bestehend.nach);
+          Object.assign(bestehend.wochen, a.wochen);
+        } else {
+          aenderungenJeOp[a.opId] = { ...a, wochen: { ...a.wochen } };
+        }
+      }
+      config = deepMerge(config, vorschlag.patch);
+    }
+    const aenderungen = Object.values(aenderungenJeOp);
+    const patch = aenderungen.length > 0
+      ? {
+        resources: {
+          byOperation: Object.fromEntries(aenderungen.map((a) => [a.opId, {
+            operatingHoursByWeek: Object.fromEntries(
+              Object.entries(a.wochen).map(([wk, n]) => [wk, stundenFuer(n)])),
+          }])),
+        },
+      }
+      : null;
+    /*
+     * Verspaetung im Fenster statt der Rohsumme aus `planeSchichten` -
+     * siehe `verspaetungImFenster` oben. Fuer "vorher" reicht der schon
+     * berechnete Ausgangsstand; fuer "nachher" wird der ENDGUELTIGE,
+     * ueber alle Runden zusammengefuehrte Stand einmal frisch gerechnet.
+     */
+    const verspaetungVorherFenster = verspaetungImFenster(basis, resultVorher);
+    const verspaetungNachherFenster = aenderungen.length > 0
+      ? verspaetungImFenster({ ...basis, config }, planeDurch({ ...basis, config }))
+      : verspaetungVorherFenster;
+    return {
+      basis,
+      resultVorher,
+      konfigNachher: aenderungen.length > 0 ? config : null,
+      vorschlag: {
+        ...letzter,
+        aenderungen,
+        patch,
+        stauVorher,
+        verspaetungVorher: verspaetungVorherFenster,
+        verspaetungNachher: verspaetungNachherFenster,
+      },
+    };
+  }
 
   /**
    * Einmal je Kalendertag wird der komplette Datenbestand als Stand
@@ -1593,22 +1715,28 @@ export function createApi(store, options = {}) {
      * fehlen sollen diese angezeigt werden."
      *
      * Wird auf Abruf gerechnet, nicht bei jeder Anzeige: Der Vorschlag
-     * terminiert mehrere Staende durch (rund 1 s).
+     * terminiert mehrere Staende durch - seit der wochenweisen Verfeinerung
+     * (Nutzerauftrag 25.09.2026: Nachtschicht nur in Engpasswochen) einige
+     * Sekunden statt rund 1 s, je nach Anzahl der Wochen und hochgesetzten
+     * Arbeitsgaenge.
+     *
+     * Iteriert bis zur Konvergenz (siehe `vorschlagKonvergent` unten): bei
+     * eng gekoppelten Engpaessen kann EIN Durchlauf von `planeSchichten`
+     * einen Arbeitsgang uebersehen, der erst wirkt, wenn ein anderer schon
+     * hochgesetzt ist - "laeuft es schon so" fand sonst nach dem
+     * Uebernehmen noch weitere, echte Verbesserungen (Nutzerpruefung
+     * 25.09.2026).
      * @param {string} scenarioId
      */
     schichtvorschlag(scenarioId) {
-      const input = materialize(dataset, scenarioId || dataset.activeScenarioId);
-      const result = planeDurch(input);
-      const vorschlag = planeSchichten(input, result,
-        (config) => planeDurch({ ...input, config }));
+      const quelle = scenarioId || dataset.activeScenarioId;
+      const { basis, resultVorher, konfigNachher, vorschlag } = vorschlagKonvergent(quelle);
       return {
         ...vorschlag,
         /** Wirkung auf den Einsatzplan: wer stand vorher ohne Platz da? */
-        leerlaufVorher: leerlaufSumme(assignPeople(result, input.config, {})),
-        leerlaufNachher: vorschlag.patch
-          ? leerlaufSumme(assignPeople(
-            planeDurch({ ...input, config: mitSchichten(input.config, vorschlag.schichten) }),
-            mitSchichten(input.config, vorschlag.schichten), {}))
+        leerlaufVorher: leerlaufSumme(assignPeople(resultVorher, basis.config, {})),
+        leerlaufNachher: konfigNachher
+          ? leerlaufSumme(assignPeople(planeDurch({ ...basis, config: konfigNachher }), konfigNachher, {}))
           : null,
       };
     },
@@ -1621,14 +1749,12 @@ export function createApi(store, options = {}) {
      */
     applySchichten(scenarioId, data = {}) {
       const quelle = scenarioId || dataset.activeScenarioId;
-      const input = materialize(dataset, quelle);
-      const result = planeDurch(input);
-      const vorschlag = planeSchichten(input, result, (config) => planeDurch({ ...input, config }));
+      const { konfigNachher, vorschlag } = vorschlagKonvergent(quelle);
       if (!vorschlag.patch) throw new ApiError('Die Schichten laufen schon so – es gibt nichts zu übernehmen.');
       const name = String(data.name || 'Schichtplan').slice(0, 80);
       const vorhanden = dataset.scenarios.find((sc) => sc.name === name && !sc.isBaseline);
       const ziel = vorhanden ?? duplicateScenario(dataset, quelle, name);
-      ziel.config = mitSchichten(input.config, vorschlag.schichten);
+      ziel.config = konfigNachher;
       ziel.note = String(data.note
         || `Schichten geplant: ${vorschlag.aenderungen
           .map((a) => `${a.name} ${a.nach}`).join(', ')} – Verspätung `

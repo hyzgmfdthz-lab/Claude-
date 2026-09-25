@@ -9,6 +9,7 @@ import path from 'node:path';
 import { openStore } from '../store.js';
 import { createApi, importRows, exportSheets, comparisonRows } from '../api.js';
 import { seedDataset } from '../../engine/index.js';
+import { stundenFuer } from '../../engine/schichtplan.js';
 import { writeXlsx, readXlsx, writeCsv, readCsv, zip, unzip } from '../xlsx.js';
 import { createServer } from '../server.js';
 
@@ -639,14 +640,19 @@ test('Schichtplan: übernommen wird in ein Szenario, nie in den laufenden Plan',
   // Die Baseline behaelt ihre Belegungszeiten
   const baseline = api.scenarioConfig('BASELINE');
   for (const a of v.aenderungen) {
-    assert.notEqual(baseline.config.resources.byOperation?.[a.opId]?.operatingHours, a.stundenNach,
+    assert.equal(baseline.config.resources.byOperation?.[a.opId]?.operatingHoursByWeek, undefined,
       `${a.name}: der laufende Plan darf sich nicht ändern`);
   }
 
-  // Im Szenario stehen die geplanten Schichten - und die Verspätung sinkt
+  // Im Szenario stehen die geplanten Schichten - wochenweise, nur die Engpasswochen -
+  // und die Verspätung sinkt
   const szenario = api.scenarioConfig(ziel.id);
   for (const a of v.aenderungen) {
-    assert.equal(szenario.config.resources.byOperation[a.opId].operatingHours, a.stundenNach);
+    assert.ok(Object.keys(a.wochen).length > 0, `${a.name}: mindestens eine Engpasswoche`);
+    const jeWoche = szenario.config.resources.byOperation[a.opId].operatingHoursByWeek;
+    for (const [wk, stunden] of Object.entries(a.wochen)) {
+      assert.equal(jeWoche[wk], stundenFuer(stunden), `${a.name} in ${wk}`);
+    }
   }
   const nachher = api.analysis(ziel.id).kpis.totalLateDays;
   assert.equal(nachher, v.verspaetungNachher,

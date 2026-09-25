@@ -301,18 +301,25 @@ export function overtimeFor(config, date) {
  * 7 produktiven Stunden je Mitarbeiter). Das Fenster begrenzt ausschliesslich
  * Plaetze und Maschinen, niemals die Arbeitszeit einer Person.
  *
- * Reihenfolge: eigener Wert des Arbeitsgangs, sonst Wochenwert, sonst der
- * allgemeine Wert. Unterhalb der Arbeitszeit eines Mitarbeiters ist das
- * Fenster nie - ein Platz ist mindestens so lange besetzt, wie gearbeitet wird.
+ * Reihenfolge, vom genauesten zum allgemeinsten:
+ *   1. eigener Wert des Arbeitsgangs FUER DIESE KW (Nutzerauftrag 25.09.2026:
+ *      Nachtschicht nur in Engpasswochen, nicht durchgehend)
+ *   2. eigener Wert des Arbeitsgangs (gilt fuer den ganzen Zeitraum)
+ *   3. allgemeiner Wochenwert (gilt fuer alle Arbeitsgaenge dieser KW)
+ *   4. allgemeiner Wert
+ * Unterhalb der Arbeitszeit eines Mitarbeiters ist das Fenster nie - ein
+ * Platz ist mindestens so lange besetzt, wie gearbeitet wird.
  *
  * @param {any} config @param {string} date @param {number} hoursPerEmployee
  * @param {string|null} [opId] Arbeitsgang mit eigenem Fenster
  */
 export function operatingHours(config, date, hoursPerEmployee, opId = null) {
   const res = config.resources ?? {};
-  const own = opId ? res.byOperation?.[opId]?.operatingHours : null;
+  const eigen = opId ? res.byOperation?.[opId] : null;
+  const eigenWoche = eigen?.operatingHoursByWeek?.[weekKey(date)];
+  const own = eigen?.operatingHours;
   const weekly = res.operatingHoursByWeek?.[weekKey(date)];
-  const v = own ?? weekly ?? res.operatingHoursPerDay;
+  const v = eigenWoche ?? own ?? weekly ?? res.operatingHoursPerDay;
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) return hoursPerEmployee;
   return Math.max(hoursPerEmployee, n);

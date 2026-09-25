@@ -45,7 +45,7 @@
 import { OPERATION_BY_ID, round2 } from './model.js';
 import { peopleOf, personPresent, absenceOn, personEffectiveFactor } from './team.js';
 import { placesFor, workersPerPlace, DAY_KIND, LIMITER_LABEL } from './capacity.js';
-import { schichtenJeArbeitsgang, wochenSchichten, SCHICHT_STUNDEN } from './schichtplan.js';
+import { schichtenJeArbeitsgangWoche, wochenSchichten, SCHICHT_STUNDEN } from './schichtplan.js';
 import { weekKey } from './calendar.js';
 
 /**
@@ -127,13 +127,28 @@ export function assignPeople(result, config, range = {}) {
    * hat. Wer in der Spaetschicht ist, kann an einem einschichtigen
    * Arbeitsgang nicht arbeiten.
    */
-  const schichtenJeOp = schichtenJeArbeitsgang(config);
   const wochenListe = [...new Set(arbeitstage.map((d) => weekKey(d)))].sort();
   const eingeplantePersonen = people.filter((p) => p.defaultActive !== false
     || Object.values(p.weeks ?? {}).some(Boolean));
   const schichtplan = wochenSchichten(config, wochenListe, eingeplantePersonen);
   /** Stunden, die eine Schicht nicht besetzen konnte - je Arbeitsgang */
   const unbesetzteSchichten = {};
+  /*
+   * Schichtzahl je Arbeitsgang - WOCHENWEISE (Nutzerauftrag 25.09.2026:
+   * Nachtschicht nur in Engpasswochen). `wochenSchichten` teilt Personen
+   * schon korrekt wochenweise auf Schichten auf; hier muss dieselbe
+   * wochenweise Sicht gelten, sonst haelt diese Stelle einen Arbeitsgang
+   * noch fuer einschichtig, obwohl die Person laengst in Schicht 3
+   * eingeteilt ist - Ergebnis waere "SCHICHT_OHNE_ARBEIT" trotz echter
+   * Arbeit (gefunden bei der Nutzerpruefung 25.09.2026 an echten Daten:
+   * 260 von 351 Personentagen "Leerlauf" kamen allein daher).
+   */
+  const schichtenJeOpCache = new Map();
+  const schichtenJeOpVon = (wk) => {
+    let v = schichtenJeOpCache.get(wk);
+    if (!v) { v = schichtenJeArbeitsgangWoche(config, wk); schichtenJeOpCache.set(wk, v); }
+    return v;
+  };
 
   for (const date of arbeitstage) {
     const list = alloc.get(date) ?? [];
@@ -158,6 +173,8 @@ export function assignPeople(result, config, range = {}) {
 
     /** Schicht je Person in DIESER Woche - innerhalb der Woche unveraendert */
     const schichtVon = schichtplan.zuordnung[weekKey(date)] ?? {};
+    /** Schichtzahl je Arbeitsgang in DIESER Woche */
+    const schichtenJeOp = schichtenJeOpVon(weekKey(date));
     /** @type {Record<string, number>} Restbudget je Person */
     const rest = {};
     for (const p of anwesend) {
@@ -507,7 +524,8 @@ export function assignPeople(result, config, range = {}) {
     /** Schichten je Arbeitsgang und die wochenweise Zuordnung */
     schichtplan: {
       maxSchichten: schichtplan.maxSchichten,
-      jeArbeitsgang: schichtenJeOp,
+      /** Hoechste Schichtzahl je Arbeitsgang, ueber den ganzen Zeitraum (informativ) */
+      jeArbeitsgang: schichtplan.schichten,
       jeWoche: schichtplan.zuordnung,
       schichtStunden: SCHICHT_STUNDEN,
     },

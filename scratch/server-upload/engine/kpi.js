@@ -997,6 +997,46 @@ export function blockedByOperation(result) {
 }
 
 /**
+ * Liegengebliebene Arbeit je Arbeitsgang UND Kalenderwoche - dieselbe
+ * Rechnung wie `blockedByOperation`, nur zusaetzlich nach KW aufgeteilt.
+ *
+ * Grundlage der wochenweisen Schichtplanung (Nutzerauftrag 25.09.2026):
+ * "die Nachtschicht muss in Engpasswochen geplant werden" - dafuer muss
+ * bekannt sein, IN WELCHER Woche ein Arbeitsgang wirklich im Rueckstand
+ * ist, nicht nur ueber den ganzen Zeitraum gemittelt.
+ *
+ * @param {any} result
+ * @returns {Record<string, Record<string, {manHours:number, days:number, peakHours:number}>>}
+ *   [weekKey][opId] = ...
+ */
+export function blockedByOperationWoche(result) {
+  /** @type {Record<string, Record<string, any>>} */
+  const out = {};
+  const jeArbeit = new Map();
+  const jeTag = new Map();
+  for (const b of result.blocked ?? []) {
+    if (b.info || !b.opId) continue;
+    const wk = weekKey(b.date);
+    const arbeit = `${wk}\u0000${b.opId}\u0000${b.projectId}`;
+    jeArbeit.set(arbeit, Math.max(jeArbeit.get(arbeit) ?? 0, b.manHours));
+    const tag = `${wk}\u0000${b.opId}\u0000${b.date}`;
+    jeTag.set(tag, (jeTag.get(tag) ?? 0) + b.manHours);
+  }
+  for (const [key, stunden] of jeArbeit) {
+    const [wk, opId] = key.split('\u0000');
+    const e = ((out[wk] ??= {})[opId] ??= { manHours: 0, days: 0, peakHours: 0 });
+    e.manHours = round2(e.manHours + stunden);
+  }
+  for (const [key, stunden] of jeTag) {
+    const [wk, opId] = key.split('\u0000');
+    const e = ((out[wk] ??= {})[opId] ??= { manHours: 0, days: 0, peakHours: 0 });
+    e.days += 1;
+    e.peakHours = Math.max(e.peakHours, round2(stunden));
+  }
+  return out;
+}
+
+/**
  * Orbitalschweiss-Sonderauswertung (§54).
  *
  * FIX Hoch08 (Audit 20.09.2026): dieselbe Fensterregel wie bei

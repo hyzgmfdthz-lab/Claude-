@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { seedDataset } from '../seed.js';
 import { materialize } from '../scenario.js';
 import { runSchedule } from '../scheduler.js';
+import { deepMerge } from '../model.js';
 import { testConfig } from './helpers.js';
 import {
   MAX_SCHICHTEN, SCHICHT_STUNDEN, schichtenAus, stundenFuer, schichtenJeArbeitsgang,
@@ -157,7 +158,10 @@ test('Der Patch enthält nur die geänderten Arbeitsgänge', () => {
 test('Das Übernehmen des Vorschlags ergibt genau die gerechnete Verspätung', () => {
   const { input, result } = stand();
   const v = plane(input, result);
-  const nachher = runSchedule({ ...input, config: mitSchichten(input.config, v.schichten) });
+  // Uebernommen wird ueber `patch` (wochenweise) - nicht ueber `v.schichten`,
+  // das ist nur noch der Spitzenwert je Arbeitsgang zur Anzeige.
+  const angewendet = v.patch ? deepMerge(input.config, v.patch) : input.config;
+  const nachher = runSchedule({ ...input, config: angewendet });
   assert.equal(verspaetung(nachher), v.verspaetungNachher,
     'was übernommen wird, muss dem gerechneten Vorschlag entsprechen');
 });

@@ -1085,6 +1085,21 @@ function schichtText(stunden) {
 }
 
 /**
+ * Klartext zu den Wochen, in denen ein Arbeitsgang tatsächlich hochgefahren
+ * wird (Nutzerauftrag 25.09.2026: Nachtschicht nur in Engpasswochen, nicht
+ * durchgehend). `wochen` ist {KW -> Schichtzahl}, wie vom Motor geliefert.
+ */
+function wochenText(wochen) {
+  const kws = Object.keys(wochen ?? {})
+    .map((wk) => Number(wk.split('-W')[1]))
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b);
+  if (kws.length === 0) return 'keine Woche mehr nötig';
+  if (kws.length <= 6) return `KW ${kws.join(', ')}`;
+  return `KW ${kws[0]}–${kws[kws.length - 1]} (${kws.length} Wochen, nicht durchgehend)`;
+}
+
+/**
  * Schichten automatisch planen.
  *
  * Ausdrueckliche Vorgabe der Abteilungsleitung (18.09.2026): "Kein Platz
@@ -1132,10 +1147,12 @@ function autoSchichtCard(a) {
       h('div.small.muted', { style: { marginBottom: '10px' } },
         'Die Anwendung sucht die Schichteinteilung, die die meisten Verspätungstage abbaut: ',
         h('strong', 'höchstens 3 Schichten'),
-        ', nur an den Arbeitsgängen, an denen es etwas bringt, und nur so weit, wie die ',
-        'schichtfähigen Leute reichen. Wer Schicht fährt, wechselt ',
+        ', nur an den Arbeitsgängen, an denen es etwas bringt, nur in den ',
+        h('strong', 'Kalenderwochen, in denen es dort wirklich einen Engpass gibt'),
+        ', und nur so weit, wie die schichtfähigen Leute reichen. Wer Schicht fährt, wechselt ',
         h('strong', 'wochenweise'),
-        ' – nicht tageweise. Was danach noch fehlt, steht darunter.'),
+        ' – nicht tageweise, und hat in der Schicht freie Platzwahl unter dem, was dort läuft. ',
+        'Was danach noch fehlt, steht darunter.'),
       h('div.btn-row', { style: { marginBottom: '10px' } }, knopf),
       inhalt),
     {
@@ -1174,7 +1191,8 @@ function vorschlagAnzeige(a, v) {
         table([
           { key: 'name', label: 'Arbeitsgang', render: (r) => h('strong', r.name) },
           { key: 'von', label: 'bisher', render: (r) => h('span.pill.pill--grey', schichtText(r.stundenVon)) },
-          { key: 'nach', label: 'geplant', render: (r) => h('span.pill.pill--blue', schichtText(r.stundenNach)) },
+          { key: 'nach', label: 'in Engpasswochen', render: (r) => h('span.pill.pill--blue', schichtText(r.stundenNach)) },
+          { key: 'wochen', label: 'welche Wochen', render: (r) => h('span.small', wochenText(r.wochen)) },
           {
             key: 'stunden',
             label: 'Belegungszeit',
@@ -1255,18 +1273,21 @@ function vorschlagAnzeige(a, v) {
 
 /** Uebernahme in ein Szenario - nie in den laufenden Plan. */
 async function uebernehmeSchichten(a, v) {
-  const text = v.aenderungen.map((x) => `${x.name}: ${schichtText(x.stundenNach)}`).join('\n');
+  const text = v.aenderungen
+    .map((x) => `${x.name}: ${schichtText(x.stundenNach)} (${wochenText(x.wochen)})`).join('\n');
   const ok = await confirmDialog('Schichtplan in ein Szenario übernehmen?',
     `${text}\n\nDie Anwendung legt ein Szenario „Schichtplan" an und rechnet den vollen Plan neu. `
     + 'Der laufende Plan bleibt unverändert – das Szenario lässt sich jederzeit verwerfen.\n\n'
     + 'Bitte die Schichteinteilung der Mannschaft danach im Einsatzplan prüfen: '
-    + 'Schichten werden wochenweise gewechselt, nicht tageweise.',
+    + 'Schichten werden wochenweise gewechselt, nicht tageweise, und nur in den genannten '
+    + 'Engpasswochen – nicht durchgehend.',
     'Übernehmen');
   if (!ok) return;
   try {
     const ziel = await api.applySchichten(a.scenarioId, {
       name: 'Schichtplan',
-      note: `Schichten geplant: ${v.aenderungen.map((x) => `${x.name} ${schichtText(x.stundenNach)}`).join(', ')}`
+      note: `Schichten geplant: ${v.aenderungen.map((x) => `${x.name} ${schichtText(x.stundenNach)} `
+        + `(${wochenText(x.wochen)})`).join(', ')}`
         + ` – Verspätung ${v.verspaetungVorher} → ${v.verspaetungNachher} Tage`,
     });
     await a.reload();
