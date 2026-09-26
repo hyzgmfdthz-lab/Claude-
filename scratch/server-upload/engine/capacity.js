@@ -416,6 +416,29 @@ export function aushilfeVon(config, opId) {
 }
 
 /**
+ * Weiterer VOLLWERTIGER Platz, situativ (Nutzerfrage 26.09.2026: "endkontrolle
+ * hat einen genehmigten 2. Platz" - gemeint ist der bereits am 25.09.2026
+ * bestaetigte dritte Pruefstand, "Beides möglich" neben dem bestehenden
+ * Zuarbeiten-Helfer). Anders als `aushilfe` (reduzierte Leistung, z. B. von
+ * Hand entgraten) ist das hier ein normaler Arbeitsplatz zu normaler
+ * Leistung - nur eben nicht von Anfang an in die Terminierung eingepreist,
+ * genau wie der zweite Saegeplatz. Braucht ein eigenes Feld, weil ein
+ * Arbeitsgang (wie Endkontrolle) BEIDES gleichzeitig haben kann: den
+ * bestehenden Zuarbeiten-Helfer UND einen situativ oeffenbaren Zusatzplatz.
+ * @param {any} config @param {string} opId
+ * @returns {{label:string, text:string}|null}
+ */
+export function zusatzplatzVon(config, opId) {
+  const res = config.resources ?? {};
+  const z = res.byOperation?.[opId]?.zusatzplatz;
+  if (!z || z.nurBeiBedarf !== true) return null;
+  const places = placesFor(config, opId);
+  const maxPlaces = Number(res.byOperation?.[opId]?.maxPlaces ?? 0);
+  if (places == null || maxPlaces <= Number(places)) return null;
+  return { label: String(z.label ?? 'weiterer Platz'), text: String(z.text ?? '') };
+}
+
+/**
  * Betreuungsstunden fuer eingearbeitete Kraefte an einem Tag.
  * Sie werden dem Stammteam abgezogen (Mentoring).
  * @param {any} config @param {string} date
@@ -796,6 +819,27 @@ export function dayCapacity(config, date) {
           ohneAushilfe: round2(capUnits),
         };
         capUnits += zusatz;
+      }
+    }
+
+    /*
+     * Weiterer vollwertiger Platz, situativ (siehe `zusatzplatzVon` oben) -
+     * unabhaengig vom Zuarbeiten-Helfer oben, denn Endkontrolle kann BEIDES
+     * gleichzeitig haben ("Beides möglich", Nutzerentscheidung 25.09.2026).
+     * Volle Leistung, deshalb kein eigener stundenfaktor - anders als die
+     * Aushilfe oben ist das kein reduziertes Handarbeiten, sondern ein
+     * normaler Arbeitsplatz.
+     */
+    const zplatz = zusatzplatzVon(config, op.id);
+    if (zplatz && plaetzeBegrenzen && capUnits > 0 && detail.places != null) {
+      const maxPlaces = Number(config.resources?.byOperation?.[op.id]?.maxPlaces ?? 0);
+      const extraPlaces = Math.max(0, maxPlaces - Number(detail.places));
+      if (extraPlaces > 0) {
+        const proPlatz = detail.workersPerPlace ?? workersPerPlace(config, op.id);
+        const zusatzManHours = round2(extraPlaces * proPlatz * opWindow * prod * f);
+        aushilfeVerfuegbar = aushilfeVerfuegbar
+          ? { ...aushilfeVerfuegbar, manHours: round2(aushilfeVerfuegbar.manHours + zusatzManHours) }
+          : { leistung: 1, stundenfaktor: 1, max: extraPlaces, label: zplatz.label, manHours: zusatzManHours };
       }
     }
 

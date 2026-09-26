@@ -16138,11 +16138,17 @@ function defaultPlaces() {
      * sind vorlaeufig 1:1 von Hydro uebernommen (validated: false) und
      * muessen noch bestaetigt werden.
      *
-     * Eine ZUSAETZLICHE, vollwertige "weiterer Platz"-Option (wie bei
-     * Saegen/Heften/Vormontage) wurde am 25.09.2026 angefragt, aber noch
-     * NICHT umgesetzt - die Nutzerentscheidung, nach den Folgen des ersten
-     * (verworfenen) Versuchs auf eine situative Loesung umzustellen, kam
-     * dazwischen. Bleibt offen fuer einen spaeteren, gezielten Nachtrag.
+     * Zusaetzlich, vollwertiger dritter Pruefstand, situativ (Nutzerfrage
+     * 26.09.2026: "endkontrolle hat einen genehmigten 2. Platz [gemeint:
+     * einen genehmigten DRITTEN Pruefstand, ueber die bestehenden zwei
+     * hinaus] ... warum wird das nicht so geplant?"). Am 25.09.2026 als
+     * "Beides möglich" bestaetigt (Zuarbeiten-Helfer UND weiterer Platz),
+     * aber damals wegen der Umstellung auf die situative Loesung (siehe
+     * Saegen/Heften/Vormontage) zurueckgestellt - jetzt nachgetragen, mit
+     * demselben `nurBeiBedarf`-Mechanismus wie dort: NICHT von vornherein
+     * in die Terminierung eingepreist, nur der Einsatzplan darf ihn
+     * situativ oeffnen, wenn eine Person sonst wirklich nichts zu tun
+     * haette (siehe `zusatzplatzVon` in capacity.js).
      */
     ENDKONTROLLE: {
       places: 2, maxPlaces: 3, workersPerPlace: 1,
@@ -16152,8 +16158,14 @@ function defaultPlaces() {
         text: 'Ein Mitarbeiter bereitet vor und arbeitet dem Prüfer zu (Werte vorläufig von der '
           + 'Hydroprüfung übernommen, noch zu bestätigen).',
       },
-      note: 'zwei Plätze, je eine Person – dritter Platz als Maßnahme möglich, im Engpass kann ein '
-        + 'Helfer zuarbeiten (Werte zu validieren)',
+      zusatzplatz: {
+        nurBeiBedarf: true,
+        label: 'dritter Prüfstand',
+        text: 'Kurzfristig ein dritter Prüfstand: eine sonst untätige Person prüft dort vollwertig '
+          + 'mit, kein Zuarbeiten.',
+      },
+      note: 'zwei Plätze, je eine Person – im Engpass kann ein Helfer zuarbeiten (Werte zu '
+        + 'validieren) oder situativ ein dritter Prüfstand geöffnet werden',
     },
     REINIGEN: { places: 1, workersPerPlace: 1 },
     /*
@@ -16987,6 +16999,29 @@ function aushilfeVon(config, opId) {
 }
 
 /**
+ * Weiterer VOLLWERTIGER Platz, situativ (Nutzerfrage 26.09.2026: "endkontrolle
+ * hat einen genehmigten 2. Platz" - gemeint ist der bereits am 25.09.2026
+ * bestaetigte dritte Pruefstand, "Beides möglich" neben dem bestehenden
+ * Zuarbeiten-Helfer). Anders als `aushilfe` (reduzierte Leistung, z. B. von
+ * Hand entgraten) ist das hier ein normaler Arbeitsplatz zu normaler
+ * Leistung - nur eben nicht von Anfang an in die Terminierung eingepreist,
+ * genau wie der zweite Saegeplatz. Braucht ein eigenes Feld, weil ein
+ * Arbeitsgang (wie Endkontrolle) BEIDES gleichzeitig haben kann: den
+ * bestehenden Zuarbeiten-Helfer UND einen situativ oeffenbaren Zusatzplatz.
+ * @param {any} config @param {string} opId
+ * @returns {{label:string, text:string}|null}
+ */
+function zusatzplatzVon(config, opId) {
+  const res = config.resources ?? {};
+  const z = res.byOperation?.[opId]?.zusatzplatz;
+  if (!z || z.nurBeiBedarf !== true) return null;
+  const places = placesFor(config, opId);
+  const maxPlaces = Number(res.byOperation?.[opId]?.maxPlaces ?? 0);
+  if (places == null || maxPlaces <= Number(places)) return null;
+  return { label: String(z.label ?? 'weiterer Platz'), text: String(z.text ?? '') };
+}
+
+/**
  * Betreuungsstunden fuer eingearbeitete Kraefte an einem Tag.
  * Sie werden dem Stammteam abgezogen (Mentoring).
  * @param {any} config @param {string} date
@@ -17370,6 +17405,27 @@ function dayCapacity(config, date) {
       }
     }
 
+    /*
+     * Weiterer vollwertiger Platz, situativ (siehe `zusatzplatzVon` oben) -
+     * unabhaengig vom Zuarbeiten-Helfer oben, denn Endkontrolle kann BEIDES
+     * gleichzeitig haben ("Beides möglich", Nutzerentscheidung 25.09.2026).
+     * Volle Leistung, deshalb kein eigener stundenfaktor - anders als die
+     * Aushilfe oben ist das kein reduziertes Handarbeiten, sondern ein
+     * normaler Arbeitsplatz.
+     */
+    const zplatz = zusatzplatzVon(config, op.id);
+    if (zplatz && plaetzeBegrenzen && capUnits > 0 && detail.places != null) {
+      const maxPlaces = Number(config.resources?.byOperation?.[op.id]?.maxPlaces ?? 0);
+      const extraPlaces = Math.max(0, maxPlaces - Number(detail.places));
+      if (extraPlaces > 0) {
+        const proPlatz = detail.workersPerPlace ?? workersPerPlace(config, op.id);
+        const zusatzManHours = round2(extraPlaces * proPlatz * opWindow * prod * f);
+        aushilfeVerfuegbar = aushilfeVerfuegbar
+          ? { ...aushilfeVerfuegbar, manHours: round2(aushilfeVerfuegbar.manHours + zusatzManHours) }
+          : { leistung: 1, stundenfaktor: 1, max: extraPlaces, label: zplatz.label, manHours: zusatzManHours };
+      }
+    }
+
     // Wochentagsregel der Abteilung (siehe rules.js)
     const allowedDays = config.operationWeekdays?.[op.id];
     if (Array.isArray(allowedDays) && allowedDays.length > 0 && !allowedDays.includes(weekday(date))) {
@@ -17463,6 +17519,7 @@ function capacitySeries(config, dates) {
   __exports["placesFor"] = placesFor;
   __exports["workersPerPlace"] = workersPerPlace;
   __exports["aushilfeVon"] = aushilfeVon;
+  __exports["zusatzplatzVon"] = zusatzplatzVon;
   __exports["mentoringHoursPerDay"] = mentoringHoursPerDay;
   __exports["reserveHoursPerDay"] = reserveHoursPerDay;
   __exports["weldersFor"] = weldersFor;

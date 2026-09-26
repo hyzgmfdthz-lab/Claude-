@@ -456,11 +456,17 @@ export function defaultPlaces() {
      * sind vorlaeufig 1:1 von Hydro uebernommen (validated: false) und
      * muessen noch bestaetigt werden.
      *
-     * Eine ZUSAETZLICHE, vollwertige "weiterer Platz"-Option (wie bei
-     * Saegen/Heften/Vormontage) wurde am 25.09.2026 angefragt, aber noch
-     * NICHT umgesetzt - die Nutzerentscheidung, nach den Folgen des ersten
-     * (verworfenen) Versuchs auf eine situative Loesung umzustellen, kam
-     * dazwischen. Bleibt offen fuer einen spaeteren, gezielten Nachtrag.
+     * Zusaetzlich, vollwertiger dritter Pruefstand, situativ (Nutzerfrage
+     * 26.09.2026: "endkontrolle hat einen genehmigten 2. Platz [gemeint:
+     * einen genehmigten DRITTEN Pruefstand, ueber die bestehenden zwei
+     * hinaus] ... warum wird das nicht so geplant?"). Am 25.09.2026 als
+     * "Beides möglich" bestaetigt (Zuarbeiten-Helfer UND weiterer Platz),
+     * aber damals wegen der Umstellung auf die situative Loesung (siehe
+     * Saegen/Heften/Vormontage) zurueckgestellt - jetzt nachgetragen, mit
+     * demselben `nurBeiBedarf`-Mechanismus wie dort: NICHT von vornherein
+     * in die Terminierung eingepreist, nur der Einsatzplan darf ihn
+     * situativ oeffnen, wenn eine Person sonst wirklich nichts zu tun
+     * haette (siehe `zusatzplatzVon` in capacity.js).
      */
     ENDKONTROLLE: {
       places: 2, maxPlaces: 3, workersPerPlace: 1,
@@ -470,8 +476,14 @@ export function defaultPlaces() {
         text: 'Ein Mitarbeiter bereitet vor und arbeitet dem Prüfer zu (Werte vorläufig von der '
           + 'Hydroprüfung übernommen, noch zu bestätigen).',
       },
-      note: 'zwei Plätze, je eine Person – dritter Platz als Maßnahme möglich, im Engpass kann ein '
-        + 'Helfer zuarbeiten (Werte zu validieren)',
+      zusatzplatz: {
+        nurBeiBedarf: true,
+        label: 'dritter Prüfstand',
+        text: 'Kurzfristig ein dritter Prüfstand: eine sonst untätige Person prüft dort vollwertig '
+          + 'mit, kein Zuarbeiten.',
+      },
+      note: 'zwei Plätze, je eine Person – im Engpass kann ein Helfer zuarbeiten (Werte zu '
+        + 'validieren) oder situativ ein dritter Prüfstand geöffnet werden',
     },
     REINIGEN: { places: 1, workersPerPlace: 1 },
     /*

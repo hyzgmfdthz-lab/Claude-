@@ -9,7 +9,7 @@ import { defaultTeam, teamOn, skillShares, shiftCapability, qualifiedFor, people
 import { assignPeople, personWeek } from '../assignment.js';
 import { runSchedule } from '../scheduler.js';
 import {
-  dayCapacity, placesFor, workersPerPlace, aushilfeVon,
+  dayCapacity, placesFor, workersPerPlace, aushilfeVon, zusatzplatzVon,
 } from '../capacity.js';
 import { seedDataset } from '../seed.js';
 import { materialize } from '../scenario.js';
@@ -426,6 +426,17 @@ test('Einsatzplan: an einem Platz stehen nicht mehr Leute, als er zulässt', () 
        */
       const hilfe = aushilfeVon(cfg, opId);
       if (hilfe) platzStunden += hilfe.max * hilfe.leistung * opWindow * hilfe.stundenfaktor;
+      /*
+       * Zusatzplatz (Nutzerfrage 26.09.2026, z. B. Endkontrolle: "dritter
+       * Pruefstand"): ein WEITERER vollwertiger Platz, situativ - hebt die
+       * Platzgrenze genauso wie die Aushilfe oben, nur zu voller statt
+       * halber Leistung (kein stundenfaktor).
+       */
+      const zplatz = zusatzplatzVon(cfg, opId);
+      if (zplatz) {
+        const maxPlaces = Number(cfg.resources?.byOperation?.[opId]?.maxPlaces ?? 0);
+        platzStunden += Math.max(0, maxPlaces - Number(plaetze)) * jePlatz * opWindow;
+      }
       assert.ok(stunden <= platzStunden + 0.5,
         `${tag.date} ${opId}: ${stunden.toFixed(1)} h auf ${plaetze} Plätzen `
         + `(höchstens ${platzStunden.toFixed(1)} h), ${leute.size} Personen`);
@@ -833,6 +844,64 @@ test('Notlösung Aushilfe (zweiter Platz "nur bei Bedarf") wirkt durch die echte
   // An diesem Tag müssen dann BEIDE Personen an Sägen stehen - nicht nur eine.
   const saegenLeute = new Set(notloesungTag.entries.filter((e) => e.opId === 'SAEGEN').map((e) => e.personId));
   assert.equal(saegenLeute.size, 2, 'der zweite Sägeplatz muss der zweiten Person tatsächlich Arbeit geben');
+});
+
+test('Endkontrolle: dritter Prüfstand (Zusatzplatz) UND Zuarbeiten-Helfer wirken nebeneinander', () => {
+  /*
+   * Nutzerfrage 26.09.2026: "endkontrolle hat einen genehmigten 2. Platz
+   * [gemeint: einen dritten Pruefstand] ... warum wird das nicht so
+   * geplant?" Am 25.09.2026 als "Beides möglich" bestaetigt, aber damals
+   * zurueckgestellt (siehe Kommentar in defaults.js/ENDKONTROLLE) - hier
+   * nachgetragen und geprueft: der Zuarbeiten-Helfer (`aushilfe`, baeckt
+   * in `capManHours` ein) und der situative dritte Pruefstand
+   * (`zusatzplatz`, `nurBeiBedarf`) muessen GLEICHZEITIG wirken, ohne
+   * sich gegenseitig zu ersetzen.
+   */
+  /*
+   * Vier Personen, aber die Kapazitaet (zwei Plaetze + der bereits
+   * eingepreiste Zuarbeiten-Helfer) reicht nur fuer 2,5 volle Tagesbudgets
+   * (18,75 h) - die vierte Person haette OHNE den dritten Pruefstand
+   * nichts zu tun. Erst dieser echte Leerstand loest die Notloesung aus
+   * (sie greift nur, "wenn eine Person sonst wirklich nichts zu tun
+   * haette" - siehe Kommentar in assignment.js).
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 4,
+      team: {
+        source: 'MANNSCHAFT', enforceSkills: true,
+        people: [
+          helferPerson('A', { ENDKONTROLLE: true }),
+          helferPerson('B', { ENDKONTROLLE: true }),
+          helferPerson('C', { ENDKONTROLLE: true }),
+          helferPerson('D', { ENDKONTROLLE: true }),
+        ],
+      },
+    },
+    resources: {
+      byOperation: {
+        ENDKONTROLLE: {
+          places: 2, maxPlaces: 3, workersPerPlace: 1,
+          aushilfe: { max: 1, leistung: 0.5, stundenfaktor: 1, label: 'dem Prüfer zuarbeiten', text: 't' },
+          zusatzplatz: { nurBeiBedarf: true, label: 'dritter Prüfstand', text: 't' },
+        },
+      },
+    },
+  });
+  const templates = { NEUBAU: { key: 'NEUBAU', steps: [{ opId: 'ENDKONTROLLE', hours: 200 }] } };
+  const project = createProject({ projectType: 'NEUBAU', dueDate: '2026-12-01', priority: 'P1' });
+  const result = runSchedule({ config, projects: [project], templates });
+  const plan = assignPeople(result, config, {});
+
+  const notloesungTag = plan.days.find((d) => d.entries.some((e) => e.notloesung && e.opId === 'ENDKONTROLLE'));
+  assert.ok(notloesungTag, 'der dritte Prüfstand muss an mindestens einem Tag tatsächlich einspringen');
+  const endkontrolleLeute = new Set(
+    notloesungTag.entries.filter((e) => e.opId === 'ENDKONTROLLE').map((e) => e.personId));
+  assert.equal(endkontrolleLeute.size, 4, 'mit dem dritten Prüfstand müssen alle vier Personen Arbeit bekommen');
+
+  // Der Zuarbeiten-Helfer wirkt daneben weiter - eine Person bekommt nur die halbe Leistung.
+  const stunden = notloesungTag.entries.filter((e) => e.opId === 'ENDKONTROLLE').map((e) => e.hours).sort((a, b) => a - b);
+  assert.equal(stunden[0], 3.75, 'der Zuarbeiten-Helfer (halbe Leistung) bleibt neben dem Zusatzplatz wirksam');
 });
 
 /* ------------------------------------------------------------------ *
