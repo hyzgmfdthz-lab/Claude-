@@ -10551,25 +10551,6 @@ function createApi(store, options = {}) {
     let letzter = null;
     let verspaetungVorher = null;
     let stauVorher = null;
-    for (let runde = 0; runde < 5; runde++) {
-      const input = { ...basis, config };
-      const result = runde === 0 ? resultVorher : planeDurch(input);
-      const vorschlag = planeSchichten(input, result, (c) => planeDurch({ ...input, config: c }));
-      if (verspaetungVorher == null) { verspaetungVorher = vorschlag.verspaetungVorher; stauVorher = vorschlag.stauVorher; }
-      letzter = vorschlag;
-      if (!vorschlag.patch) break;
-      for (const a of vorschlag.aenderungen) {
-        const bestehend = aenderungenJeOp[a.opId];
-        if (bestehend) {
-          bestehend.nach = Math.max(bestehend.nach, a.nach);
-          bestehend.stundenNach = stundenFuer(bestehend.nach);
-          Object.assign(bestehend.wochen, a.wochen);
-        } else {
-          aenderungenJeOp[a.opId] = { ...a, wochen: { ...a.wochen } };
-        }
-      }
-      config = deepMerge(config, vorschlag.patch);
-    }
     /** Baut aus einer Teilmenge der Aenderungen eine Konfiguration. */
     const konfigAus = (map) => {
       const teil = Object.values(map);
@@ -10585,145 +10566,240 @@ function createApi(store, options = {}) {
     };
 
     /*
-     * Nachschliff: Schichten wieder herausnehmen, die im ENDSTAND kaum noch
-     * etwas retten, aber Leute ohne passende Arbeit in eine ganze
-     * Zusatzschicht zwingen ("Schicht ohne Arbeit").
+     * Terminierung einmal rechnen, Verspaetung und Reibung daraus ablesen -
+     * keine doppelte Simulation.
      *
-     * `planeSchichten` sieht das nicht - es rechnet nur Termine, nicht
-     * Personen (dafuer muesste es `assignPeople` je Kandidat aufrufen, das
-     * waere in der Kandidatensuche selbst zu teuer und, wie die
-     * Nutzerpruefung 25.09.2026 zeigte, auch gefaehrlich: eine hoehere
-     * Huerde MITTEN in der Kandidatensuche aendert die Reihenfolge, in der
-     * Kandidaten getestet werden, und damit den ganzen weiteren Verlauf -
-     * in der Probe wurde dadurch das Ergebnis nicht schlanker, sondern
-     * gleichzeitig schlechter UND unruhiger (311 -> 331 Verspaetungstage,
-     * 17 -> 25 mal Schicht ohne Arbeit).
+     * FIX (Nutzerpruefung 26.09.2026): zwei Fehlversuche zeigten, warum
+     * beide Teile hier zusammengehoeren.
      *
-     * Deshalb erst NACH der Konvergenz, am fertigen Ergebnis: jede
-     * angenommene Schicht wird einzeln testweise wieder herausgenommen.
-     * Kostet das Herausnehmen nur wenig Termintreue (hoechstens 2 Tage) und
-     * baut es tatsaechlich "Schicht ohne Arbeit" ab, bleibt sie draussen -
-     * sonst bleibt sie drin. Das aendert nichts an der Suche selbst, nur an
-     * der fertigen Auswahl.
+     * 1. "Reibung" zaehlte zunaechst nur "Schicht ohne Arbeit" - eine zweite,
+     * ebenso ernste Form blieb unbeachtet: "Budget der Qualifizierten
+     * ausgeschoepft" (`plan.unassignedHours`). Werden mehrere Arbeitsgaenge
+     * GLEICHZEITIG hochgesetzt, kann die gemeinsam benoetigte, aber geteilte
+     * Mannschaft an einem Tag fuer den EINEN Arbeitsgang ausreichen und fuer
+     * den ANDEREN schon aufgebraucht sein - nachgewiesen an echten Daten:
+     * 269,9 Stunden ohne jede Person, obwohl die Terminierung sie fuer
+     * ausfuehrbar hielt.
+     *
+     * 2. Der erste Versuch, das zu beheben, rechnete hier mit
+     * `assignPeople(result, cfg, {})` - OHNE Vorzug/Notloesung (`extra`
+     * leer), aus Geschwindigkeitsgruenden. Das Ergebnis: die Auswahl traf
+     * Entscheidungen nach einem Bild des Personaleinsatzes, das mit dem
+     * ECHTEN Einsatzplan (der Vorzug/Notloesung nutzt) nicht uebereinstimmt
+     * - am echten Einsatzplan gemessen wurde es dadurch NICHT besser,
+     * sondern schlechter (462 statt 269,9 Stunden offen), weil Vorzug im
+     * echten Plan woanders schon Abhilfe schafft, die hier unsichtbar
+     * blieb. Deshalb bekommt `assignPeople` hier dieselben `extra`
+     * (`projects`/`templates`) wie der ECHTE Einsatzplan (siehe
+     * `schichtvorschlag`/`assignment`/`belegung` unten) - die Bewertung
+     * sieht jetzt genau das, was am Ende tatsaechlich zaehlt.
+     *
+     * 3. Ein DRITTER Fehlversuch (noch vor dem obigen) rechnete beide Formen
+     * zu EINER Zahl zusammen (`schichtOhneArbeit + unassignedHours / 7,5`)
+     * und liess Nachschliff/Ergaenzung nach dieser Summe entscheiden. Das
+     * erlaubt einen schlechten Handel: eine einzelne "Schicht ohne Arbeit"
+     * gegen viele Stunden "Budget der Qualifizierten ausgeschoepft"
+     * eintauschen, weil die Summe trotzdem sinkt - am echten Einsatzplan
+     * gemessen (mit den echten `extra` von oben!) wurden so aus 269,9
+     * Stunden 491,2 Stunden, waehrend "Schicht ohne Arbeit" brav auf 0 fiel.
+     * Beide Formen sind derselbe FEHLER, aber keine WAEHRUNG, in der man die
+     * eine gegen die andere eintauschen darf. Deshalb entscheiden
+     * Nachschliff/Ergaenzung unten ueber PARETO: eine Aenderung gilt nur
+     * dann als Verbesserung, wenn KEINE der beiden Formen zunimmt und
+     * WENIGSTENS eine davon abnimmt (siehe `paretoBesser` unten) - nie auf
+     * Kosten der jeweils anderen.
      */
-    /** Terminierung einmal rechnen, Verspaetung und Reibung daraus ablesen - keine doppelte Simulation. */
     const bewerten = (cfg) => {
       const result = planeDurch({ ...basis, config: cfg });
       const verspaetung = verspaetungImFenster({ ...basis, config: cfg }, result);
-      const plan = assignPeople(result, cfg, {});
+      const plan = assignPeople(result, cfg, {}, { projects: basis.projects, templates: basis.templates });
       let letzterArbeitstag = null;
       for (const t of plan.days) if ((t.entries?.length ?? 0) > 0) letzterArbeitstag = t.date;
-      let reibung = 0;
+      let schichtOhneArbeit = 0;
       for (const t of plan.days) {
         if (letzterArbeitstag && t.date > letzterArbeitstag) continue;
-        for (const i of t.idle ?? []) if (i.schicht > 1 && i.grund === 'SCHICHT_OHNE_ARBEIT') reibung++;
+        for (const i of t.idle ?? []) if (i.schicht > 1 && i.grund === 'SCHICHT_OHNE_ARBEIT') schichtOhneArbeit++;
       }
-      return { verspaetung, reibung, plan, letzterArbeitstag };
+      const unassignedHours = round2(plan.unassignedHours ?? 0);
+      return { verspaetung, schichtOhneArbeit, unassignedHours, plan, letzterArbeitstag };
     };
+    /**
+     * `a` ist gegenueber `b` eine Verbesserung, wenn keine der beiden
+     * Reibungsformen zunimmt und wenigstens eine davon abnimmt - nie ein
+     * Eintausch der einen gegen die andere (siehe Kommentar an `bewerten`).
+     */
+    const paretoBesser = (a, b) => a.schichtOhneArbeit <= b.schichtOhneArbeit
+      && a.unassignedHours <= b.unassignedHours + 0.01
+      && (a.schichtOhneArbeit < b.schichtOhneArbeit || a.unassignedHours < b.unassignedHours - 0.01);
     const NACHSCHLIFF_TOLERANZ_TAGE = 2;
-    if (Object.keys(aenderungenJeOp).length > 0) {
-      let { verspaetung: besteVerspaetung, reibung: besteReibung } = bewerten(config);
-      /*
-       * Ein einzelner Durchlauf reicht nicht immer: manche Arbeitsgaenge
-       * sind erst GEMEINSAM ueberfluessig - einzeln fuer sich, waehrend der
-       * jeweils andere noch drinsteht, kostet die Ruecknahme noch mehr als
-       * die Toleranz erlaubt. Deshalb wird wiederholt, bis eine Runde
-       * nichts mehr findet - mit derselben Rundenobergrenze wie die
-       * Konvergenz oben.
-       */
-      for (let nachschliffRunde = 0; nachschliffRunde < 5; nachschliffRunde++) {
-        let etwasEntfernt = false;
-        for (const opId of Object.keys(aenderungenJeOp)) {
-          const probe = { ...aenderungenJeOp };
-          delete probe[opId];
-          const configOhne = konfigAus(probe);
-          const { verspaetung: verspaetungOhne, reibung: reibungOhne } = bewerten(configOhne);
-          if (verspaetungOhne - besteVerspaetung <= NACHSCHLIFF_TOLERANZ_TAGE && reibungOhne < besteReibung) {
-            delete aenderungenJeOp[opId];
-            config = configOhne;
-            besteVerspaetung = verspaetungOhne;
-            besteReibung = reibungOhne;
-            etwasEntfernt = true;
-          }
-        }
-        if (!etwasEntfernt) break;
-      }
-    }
 
     /*
-     * Ergaenzung: wer trotz allem ohne passende Arbeit dasteht ("Schicht
-     * ohne Arbeit" - z. B. weil "keiner darf alleine arbeiten" mehr Leute
-     * in eine Schicht zwingt, als es dort qualifizierte gibt), bekommt
-     * wenn moeglich einen EIGENEN Arbeitsgang fuer GENAU DIESE EINE WOCHE
-     * einen Grad hoeher gesetzt - wenn dafuer wirklich zu ihm passende
-     * Arbeit wartet UND das die Verspaetung nicht verschlechtert.
-     * Nutzeranfrage 25.09.2026: "es sollte die beste Option genutzt
-     * werden" (genannt: Hydroprüfung, Entgraten, ein dritter Heftplatz,
-     * ein zweiter Sägeplatz - alles Arbeitsgänge, an denen die Person
-     * bereits qualifiziert waere, wenn die Schicht dort liefe).
-     *
-     * Wie beim Nachschliff oben: getestet wird erst NACH der Konvergenz,
-     * am fertigen Ergebnis - nicht in der Kandidatensuche selbst, aus
-     * demselben Grund (eine Aenderung mitten in der Suche verschiebt
-     * deren ganzen weiteren Verlauf, siehe Nachschliff-Kommentar oben).
-     * Von mehreren moeglichen Arbeitsgaengen wird je Woche nur die BESTE
-     * Option uebernommen (wenigste verbleibende Reibung, bei Gleichstand
-     * die kleinere Verspaetung) - dann neu bewertet, bis nichts mehr
-     * hilft oder die Rundenobergrenze erreicht ist.
+     * Aeussere Konvergenz (Nutzerpruefung 26.09.2026): Konvergenz (unten),
+     * Nachschliff und Ergaenzung koennen sich GEGENSEITIG neue
+     * Moeglichkeiten eroeffnen - eine hochgesetzte Schicht macht eine
+     * andere manchmal erst noetig (mehr Auslastung dort) oder erst
+     * ueberfluessig (die Person hat jetzt woanders Arbeit). Ein einzelner
+     * Durchlauf reicht deshalb nicht immer: durch einen echten Test
+     * entdeckt, nicht vermutet - "laeuft es schon so, wird nichts
+     * uebernommen" fand nach dem tatsaechlichen Uebernehmen noch drei
+     * weitere, echte Verbesserungen (ORBITAL_KEHLNAHT, HYDRO, ENDKONTROLLE).
+     * Deshalb wird die GESAMTE Kette wiederholt, bis ein voller Durchlauf
+     * nichts mehr aendert - erst dann ist der Vorschlag wirklich zu Ende
+     * gerechnet, und ein zweiter Aufruf auf dem Ergebnis findet nichts mehr.
      */
-    for (let ergaenzungRunde = 0; ergaenzungRunde < 5; ergaenzungRunde++) {
-      const { verspaetung: besteVerspaetung, reibung: besteReibung, plan: bestePlan, letzterArbeitstag }
-        = bewerten(config);
-      if (besteReibung === 0) break;
-      /** @type {Map<string, {wk:string, schicht:number, ops:Set<string>}>} Schluessel: Woche|Schicht */
-      const betroffen = new Map();
-      for (const t of bestePlan.days) {
-        if (letzterArbeitstag && t.date > letzterArbeitstag) continue;
-        for (const idle of t.idle ?? []) {
-          if (idle.schicht <= 1 || idle.grund !== 'SCHICHT_OHNE_ARBEIT') continue;
-          const schluessel = `${t.weekKey}|${idle.schicht}`;
-          const e = betroffen.get(schluessel) ?? { wk: t.weekKey, schicht: idle.schicht, ops: new Set() };
-          for (const opId of idle.arbeitsgaenge ?? []) e.ops.add(opId);
-          betroffen.set(schluessel, e);
-        }
-      }
-      if (betroffen.size === 0) break;
+    const AUSSEN_KAPPE = 5;
+    for (let aussenRunde = 0; aussenRunde < AUSSEN_KAPPE; aussenRunde++) {
+      let aussenGeaendert = false;
 
-      let bestKandidat = null;
-      for (const { wk, schicht, ops } of betroffen.values()) {
-        const aktuell = schichtenJeArbeitsgangWoche(config, wk);
-        for (const opId of ops) {
-          if (Math.floor(aktuell[opId] ?? 1) >= schicht) continue; // laeuft dort schon
-          const bestehend = aenderungenJeOp[opId];
-          const basisLevel = schichtenJeArbeitsgang(basis.config)[opId] ?? 1;
-          const nach = Math.max(bestehend?.nach ?? basisLevel, schicht);
-          const probe = {
-            ...aenderungenJeOp,
-            [opId]: {
-              opId,
-              name: OPERATION_BY_ID[opId]?.name ?? opId,
-              von: bestehend?.von ?? basisLevel,
-              nach,
-              stundenNach: stundenFuer(nach),
-              wochen: { ...(bestehend?.wochen ?? {}), [wk]: schicht },
-            },
-          };
-          const configProbe = konfigAus(probe);
-          const { verspaetung: verspaetungProbe, reibung: reibungProbe } = bewerten(configProbe);
-          if (verspaetungProbe > besteVerspaetung) continue; // darf Termine nicht verschlechtern
-          if (reibungProbe >= besteReibung) continue; // muss wirklich etwas bringen
-          if (!bestKandidat || reibungProbe < bestKandidat.reibung
-            || (reibungProbe === bestKandidat.reibung && verspaetungProbe < bestKandidat.verspaetung)) {
-            bestKandidat = {
-              opId, eintrag: probe[opId], config: configProbe,
-              verspaetung: verspaetungProbe, reibung: reibungProbe,
-            };
+      for (let runde = 0; runde < 5; runde++) {
+        const input = { ...basis, config };
+        const result = (aussenRunde === 0 && runde === 0) ? resultVorher : planeDurch(input);
+        const vorschlag = planeSchichten(input, result, (c) => planeDurch({ ...input, config: c }));
+        if (verspaetungVorher == null) { verspaetungVorher = vorschlag.verspaetungVorher; stauVorher = vorschlag.stauVorher; }
+        letzter = vorschlag;
+        if (!vorschlag.patch) break;
+        aussenGeaendert = true;
+        for (const a of vorschlag.aenderungen) {
+          const bestehend = aenderungenJeOp[a.opId];
+          if (bestehend) {
+            bestehend.nach = Math.max(bestehend.nach, a.nach);
+            bestehend.stundenNach = stundenFuer(bestehend.nach);
+            Object.assign(bestehend.wochen, a.wochen);
+          } else {
+            aenderungenJeOp[a.opId] = { ...a, wochen: { ...a.wochen } };
           }
         }
+        config = deepMerge(config, vorschlag.patch);
       }
-      if (!bestKandidat) break;
-      aenderungenJeOp[bestKandidat.opId] = bestKandidat.eintrag;
-      config = bestKandidat.config;
+
+      /*
+       * Nachschliff: Schichten wieder herausnehmen, die im ENDSTAND kaum
+       * noch etwas retten, aber Leute ohne passende Arbeit in eine ganze
+       * Zusatzschicht zwingen ("Schicht ohne Arbeit").
+       *
+       * `planeSchichten` sieht das nicht - es rechnet nur Termine, nicht
+       * Personen (dafuer muesste es `assignPeople` je Kandidat aufrufen,
+       * das waere in der Kandidatensuche selbst zu teuer und, wie die
+       * Nutzerpruefung 25.09.2026 zeigte, auch gefaehrlich: eine hoehere
+       * Huerde MITTEN in der Kandidatensuche aendert die Reihenfolge, in
+       * der Kandidaten getestet werden, und damit den ganzen weiteren
+       * Verlauf - in der Probe wurde dadurch das Ergebnis nicht schlanker,
+       * sondern gleichzeitig schlechter UND unruhiger (311 -> 331
+       * Verspaetungstage, 17 -> 25 mal Schicht ohne Arbeit).
+       *
+       * Deshalb erst NACH der Konvergenz, am fertigen Ergebnis: jede
+       * angenommene Schicht wird einzeln testweise wieder herausgenommen.
+       * Kostet das Herausnehmen nur wenig Termintreue (hoechstens 2 Tage)
+       * und baut es tatsaechlich "Schicht ohne Arbeit" ab, bleibt sie
+       * draussen - sonst bleibt sie drin. Das aendert nichts an der Suche
+       * selbst, nur an der fertigen Auswahl.
+       */
+      if (Object.keys(aenderungenJeOp).length > 0) {
+        let beste = bewerten(config);
+        /*
+         * Ein einzelner Durchlauf reicht nicht immer: manche Arbeitsgaenge
+         * sind erst GEMEINSAM ueberfluessig - einzeln fuer sich, waehrend
+         * der jeweils andere noch drinsteht, kostet die Ruecknahme noch
+         * mehr als die Toleranz erlaubt. Deshalb wird wiederholt, bis eine
+         * Runde nichts mehr findet.
+         */
+        for (let nachschliffRunde = 0; nachschliffRunde < 5; nachschliffRunde++) {
+          let etwasEntfernt = false;
+          for (const opId of Object.keys(aenderungenJeOp)) {
+            const probe = { ...aenderungenJeOp };
+            delete probe[opId];
+            const configOhne = konfigAus(probe);
+            const ohne = bewerten(configOhne);
+            if (ohne.verspaetung - beste.verspaetung <= NACHSCHLIFF_TOLERANZ_TAGE && paretoBesser(ohne, beste)) {
+              delete aenderungenJeOp[opId];
+              config = configOhne;
+              beste = ohne;
+              etwasEntfernt = true;
+              aussenGeaendert = true;
+            }
+          }
+          if (!etwasEntfernt) break;
+        }
+      }
+
+      /*
+       * Ergaenzung: wer trotz allem ohne passende Arbeit dasteht ("Schicht
+       * ohne Arbeit" - z. B. weil "keiner darf alleine arbeiten" mehr
+       * Leute in eine Schicht zwingt, als es dort qualifizierte gibt),
+       * bekommt wenn moeglich einen EIGENEN Arbeitsgang fuer GENAU DIESE
+       * EINE WOCHE einen Grad hoeher gesetzt - wenn dafuer wirklich zu ihm
+       * passende Arbeit wartet UND das die Verspaetung nicht
+       * verschlechtert. Nutzeranfrage 25.09.2026: "es sollte die beste
+       * Option genutzt werden" (genannt: Hydroprüfung, Entgraten, ein
+       * dritter Heftplatz, ein zweiter Sägeplatz - alles Arbeitsgänge, an
+       * denen die Person bereits qualifiziert waere, wenn die Schicht dort
+       * liefe).
+       *
+       * Wie beim Nachschliff oben: getestet wird erst NACH der Konvergenz,
+       * am fertigen Ergebnis - nicht in der Kandidatensuche selbst, aus
+       * demselben Grund (eine Aenderung mitten in der Suche verschiebt
+       * deren ganzen weiteren Verlauf, siehe Nachschliff-Kommentar oben).
+       * Von mehreren moeglichen Arbeitsgaengen wird je Woche nur die BESTE
+       * Option uebernommen (die meiste "Schicht ohne Arbeit" abgebaut, bei
+       * Gleichstand das wenigste zusaetzliche `unassignedHours`, siehe
+       * `paretoBesser` an `bewerten` oben) - dann neu bewertet, bis nichts
+       * mehr hilft oder die Rundenobergrenze erreicht ist.
+       */
+      for (let ergaenzungRunde = 0; ergaenzungRunde < 5; ergaenzungRunde++) {
+        const beste = bewerten(config);
+        const { plan: bestePlan, letzterArbeitstag } = beste;
+        if (beste.schichtOhneArbeit === 0) break;
+        /** @type {Map<string, {wk:string, schicht:number, ops:Set<string>}>} Schluessel: Woche|Schicht */
+        const betroffen = new Map();
+        for (const t of bestePlan.days) {
+          if (letzterArbeitstag && t.date > letzterArbeitstag) continue;
+          for (const idle of t.idle ?? []) {
+            if (idle.schicht <= 1 || idle.grund !== 'SCHICHT_OHNE_ARBEIT') continue;
+            const schluessel = `${t.weekKey}|${idle.schicht}`;
+            const e = betroffen.get(schluessel) ?? { wk: t.weekKey, schicht: idle.schicht, ops: new Set() };
+            for (const opId of idle.arbeitsgaenge ?? []) e.ops.add(opId);
+            betroffen.set(schluessel, e);
+          }
+        }
+        if (betroffen.size === 0) break;
+
+        let bestKandidat = null;
+        for (const { wk, schicht, ops } of betroffen.values()) {
+          const aktuell = schichtenJeArbeitsgangWoche(config, wk);
+          for (const opId of ops) {
+            if (Math.floor(aktuell[opId] ?? 1) >= schicht) continue; // laeuft dort schon
+            const bestehend = aenderungenJeOp[opId];
+            const basisLevel = schichtenJeArbeitsgang(basis.config)[opId] ?? 1;
+            const nach = Math.max(bestehend?.nach ?? basisLevel, schicht);
+            const probe = {
+              ...aenderungenJeOp,
+              [opId]: {
+                opId,
+                name: OPERATION_BY_ID[opId]?.name ?? opId,
+                von: bestehend?.von ?? basisLevel,
+                nach,
+                stundenNach: stundenFuer(nach),
+                wochen: { ...(bestehend?.wochen ?? {}), [wk]: schicht },
+              },
+            };
+            const configProbe = konfigAus(probe);
+            const probeBewertung = bewerten(configProbe);
+            if (probeBewertung.verspaetung > beste.verspaetung) continue; // darf Termine nicht verschlechtern
+            if (!paretoBesser(probeBewertung, beste)) continue; // muss wirklich etwas bringen, ohne die andere Reibung zu verschlechtern
+            if (!bestKandidat || probeBewertung.schichtOhneArbeit < bestKandidat.bewertung.schichtOhneArbeit
+              || (probeBewertung.schichtOhneArbeit === bestKandidat.bewertung.schichtOhneArbeit
+                && probeBewertung.unassignedHours < bestKandidat.bewertung.unassignedHours)) {
+              bestKandidat = { opId, eintrag: probe[opId], config: configProbe, bewertung: probeBewertung };
+            }
+          }
+        }
+        if (!bestKandidat) break;
+        aenderungenJeOp[bestKandidat.opId] = bestKandidat.eintrag;
+        config = bestKandidat.config;
+        aussenGeaendert = true;
+      }
+
+      if (!aussenGeaendert) break;
     }
 
     const aenderungen = Object.values(aenderungenJeOp);
