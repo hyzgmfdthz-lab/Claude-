@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Armaturenbau MEGC – Produktionsplanung</title>
-<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-25">
+<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-26">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%2300727a'/><path d='M22 70V30h11v15h12V30h11v40H45V55H33v15z' fill='white'/></svg>">
 <style>
 /* ==================================================================
@@ -17189,9 +17189,35 @@ function dayCapacity(config, date) {
       detail.allowedWeekdays = allowedDays;
     }
 
+    /*
+     * FIX (Nutzerpruefung 25.09.2026, gefunden beim Untersuchen der
+     * Schichtuebergabe): `capManHours` rechnete den Aushilfe-Zusatz mit
+     * demselben Faktor wie die normale Besetzung - dabei kostet er, wenn
+     * `stundenfaktor` > 1 ist (z. B. Entgraten von Hand: doppelte
+     * Arbeitszeit fuer dieselbe Menge), TATSAECHLICH mehr Personenstunden
+     * pro Einheit. Die Terminierung selbst rechnete das schon richtig
+     * (`usedManHours` beruecksichtigt den Faktor) - nur die angezeigte
+     * TAGESKAPAZITAET war zu niedrig, sodass der Einsatzplan an manchen
+     * Tagen mehr Stunden auswies, als die Kapazitaet zuliess (28 statt
+     * 21 h bei voll ausgeschoepfter Aushilfe). Der Ausgleich: den
+     * effektiven Stunden-je-Einheit-Faktor aus dem VERHAELTNIS von
+     * Basis- und Aushilfe-Anteil bilden, statt pauschal `f` zu nehmen -
+     * wird die Kapazitaet danach noch durch die Wochentagsregel auf 0
+     * gesetzt, bleibt auch capManHours bei 0 (0 * Faktor).
+     */
+    let manHourFaktorEffektiv = f;
+    if (detail.aushilfe) {
+      const basis = Math.max(0, detail.aushilfe.ohneAushilfe);
+      const zusatz = Math.max(0, detail.aushilfe.einheiten);
+      const einheitenGesamt = basis + zusatz;
+      if (einheitenGesamt > 0) {
+        const stundenGesamt = basis * f + zusatz * f * detail.aushilfe.stundenfaktor;
+        manHourFaktorEffektiv = stundenGesamt / einheitenGesamt;
+      }
+    }
     byOp[op.id] = {
       capUnits: round2(Math.max(0, capUnits)),
-      capManHours: round2(Math.max(0, capUnits) * f),
+      capManHours: round2(Math.max(0, capUnits) * manHourFaktorEffektiv),
       /** Was OHNE Aushilfe moeglich waere - damit ist sie nachrechenbar. */
       capOhneAushilfe: round2(Math.max(0, detail.aushilfe ? detail.aushilfe.ohneAushilfe : capUnits)),
       aushilfeStundenfaktor: detail.aushilfe ? detail.aushilfe.stundenfaktor : 1,
@@ -24717,8 +24743,16 @@ function assignPeople(result, config, range = {}, extra = {}) {
      * naechsten Tagen zuerst genommen (kein wilder Griff Wochen voraus),
      * und die Platzgrenze der EIGENEN Schicht gilt genauso wie oben - ein
      * Vorzug darf keinen Platz ueberbelegen.
+     *
+     * Nutzeranfrage 25.09.2026: 5 Werktage waren zu knapp bemessen - "Sägen
+     * Entgraten Biegen kann auch weiter vorgezogen werden als 5 Tage, hier
+     * sind auch 15 Tage möglich, solange die Arbeitsgang-Reihenfolge
+     * eingehalten ist." Die Fensterlaenge selbst ist kein Sicherheitsrisiko
+     * - `heuteVorziehbar` prueft Freigabe UND Vorgaenger unabhaengig davon,
+     * wie weit der Zieltag entfernt liegt. Deshalb gilt die groessere Zahl
+     * fuer ALLE Arbeitsgaenge einheitlich, nicht nur die drei genannten.
      */
-    const VORZUG_FENSTER_TAGE = 5;
+    const VORZUG_FENSTER_TAGE = 15;
     if (extra.projects && extra.templates) {
       /*
        * Die Platzgrenze allein reicht nicht - sie prueft nur "wie viele
@@ -24769,8 +24803,10 @@ function assignPeople(result, config, range = {}, extra = {}) {
             const gruppe = OPERATION_BY_ID[a.opId]?.capacityGroup ?? a.opId;
             const drauf = (personenAn[`${gruppe}#${meineSchicht}`] ??= new Set());
             const plaetzeJeSchicht = plaetzeAm(config, a.opId, day);
+            const plaetzeJeSchichtMax = plaetzeMaxAm(config, a.opId, day);
             const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
-            if (!drauf.has(p.id) && belegt >= plaetzeJeSchicht) continue;
+            if (!drauf.has(p.id) && belegt >= plaetzeJeSchichtMax) continue;
+            const zusatzplatz = !drauf.has(p.id) && belegt >= plaetzeJeSchicht;
             const nimm = round2(Math.min(rest[p.id], a.manHours, freiFuer(a.opId)));
             if (nimm < MINDESTBLOCK && nimm < (rest[p.id] ?? 0) - 0.01) continue;
             if (nimm <= 0.01) continue;
@@ -24785,6 +24821,8 @@ function assignPeople(result, config, range = {}, extra = {}) {
               projectId: a.projectId,
               orderNo: projectName.get(a.projectId) ?? a.projectId,
               hours: nimm,
+              /** Kurzfristig ueber die normale Platzgrenze hinaus, siehe plaetzeMaxAm oben */
+              zusatzplatz: zusatzplatz || undefined,
               schicht: meineSchicht,
               /** Vorgezogen von einem spaeteren Tag, siehe Kommentar oben */
               vorgezogen: true,
@@ -24943,6 +24981,29 @@ function plaetzeAm(config, opId, day) {
   if (plaetze == null || !Number.isFinite(Number(plaetze))) return Number.MAX_SAFE_INTEGER;
   const jePlatz = Math.max(1, Number(workersPerPlace(config, opId) ?? 1));
   return Math.max(1, Math.floor(Number(plaetze) * jePlatz));
+}
+
+/**
+ * Wie viele Personen koennten hoechstens gleichzeitig arbeiten, wenn
+ * KURZFRISTIG ein weiterer Platz eingerichtet wird - "ein zweiter ist bei
+ * Bedarf einrichtbar" (Nutzeranfrage 25.09.2026: "Es kann kurzfristig ein
+ * 2. Sägeplatz aktiviert werden ... Somit kann kein Platzmangel mehr
+ * vorkommen"). Nur als LETZTER Ausweg im Vorzug (siehe dort) gedacht, um
+ * echten Leerlauf zu vermeiden - keine dauerhafte Kapazitaetsplanung
+ * (dafuer gibt es den Mehraufwand/"zweiter Platz" als eigene Massnahme).
+ * Ops ohne hinterlegtes `maxPlaces` (z. B. die Orbital-Maschinen, die man
+ * nicht einfach dazustellt) bleiben bei der normalen Platzgrenze.
+ * @param {any} config @param {string} opId @param {any} day
+ */
+function plaetzeMaxAm(config, opId, day) {
+  const maxPlaces = Number(config.resources?.byOperation?.[opId]?.maxPlaces ?? 0);
+  const plaetze = placesFor(config, opId);
+  if (maxPlaces <= 0 || plaetze == null || !Number.isFinite(Number(plaetze))
+    || maxPlaces <= Number(plaetze)) {
+    return plaetzeAm(config, opId, day);
+  }
+  const jePlatz = Math.max(1, Number(workersPerPlace(config, opId) ?? 1));
+  return Math.max(1, Math.floor(maxPlaces * jePlatz));
 }
 
 /**

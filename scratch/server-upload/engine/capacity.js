@@ -772,9 +772,35 @@ export function dayCapacity(config, date) {
       detail.allowedWeekdays = allowedDays;
     }
 
+    /*
+     * FIX (Nutzerpruefung 25.09.2026, gefunden beim Untersuchen der
+     * Schichtuebergabe): `capManHours` rechnete den Aushilfe-Zusatz mit
+     * demselben Faktor wie die normale Besetzung - dabei kostet er, wenn
+     * `stundenfaktor` > 1 ist (z. B. Entgraten von Hand: doppelte
+     * Arbeitszeit fuer dieselbe Menge), TATSAECHLICH mehr Personenstunden
+     * pro Einheit. Die Terminierung selbst rechnete das schon richtig
+     * (`usedManHours` beruecksichtigt den Faktor) - nur die angezeigte
+     * TAGESKAPAZITAET war zu niedrig, sodass der Einsatzplan an manchen
+     * Tagen mehr Stunden auswies, als die Kapazitaet zuliess (28 statt
+     * 21 h bei voll ausgeschoepfter Aushilfe). Der Ausgleich: den
+     * effektiven Stunden-je-Einheit-Faktor aus dem VERHAELTNIS von
+     * Basis- und Aushilfe-Anteil bilden, statt pauschal `f` zu nehmen -
+     * wird die Kapazitaet danach noch durch die Wochentagsregel auf 0
+     * gesetzt, bleibt auch capManHours bei 0 (0 * Faktor).
+     */
+    let manHourFaktorEffektiv = f;
+    if (detail.aushilfe) {
+      const basis = Math.max(0, detail.aushilfe.ohneAushilfe);
+      const zusatz = Math.max(0, detail.aushilfe.einheiten);
+      const einheitenGesamt = basis + zusatz;
+      if (einheitenGesamt > 0) {
+        const stundenGesamt = basis * f + zusatz * f * detail.aushilfe.stundenfaktor;
+        manHourFaktorEffektiv = stundenGesamt / einheitenGesamt;
+      }
+    }
     byOp[op.id] = {
       capUnits: round2(Math.max(0, capUnits)),
-      capManHours: round2(Math.max(0, capUnits) * f),
+      capManHours: round2(Math.max(0, capUnits) * manHourFaktorEffektiv),
       /** Was OHNE Aushilfe moeglich waere - damit ist sie nachrechenbar. */
       capOhneAushilfe: round2(Math.max(0, detail.aushilfe ? detail.aushilfe.ohneAushilfe : capUnits)),
       aushilfeStundenfaktor: detail.aushilfe ? detail.aushilfe.stundenfaktor : 1,

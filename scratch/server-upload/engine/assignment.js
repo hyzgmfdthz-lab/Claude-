@@ -503,8 +503,16 @@ export function assignPeople(result, config, range = {}, extra = {}) {
      * naechsten Tagen zuerst genommen (kein wilder Griff Wochen voraus),
      * und die Platzgrenze der EIGENEN Schicht gilt genauso wie oben - ein
      * Vorzug darf keinen Platz ueberbelegen.
+     *
+     * Nutzeranfrage 25.09.2026: 5 Werktage waren zu knapp bemessen - "Sägen
+     * Entgraten Biegen kann auch weiter vorgezogen werden als 5 Tage, hier
+     * sind auch 15 Tage möglich, solange die Arbeitsgang-Reihenfolge
+     * eingehalten ist." Die Fensterlaenge selbst ist kein Sicherheitsrisiko
+     * - `heuteVorziehbar` prueft Freigabe UND Vorgaenger unabhaengig davon,
+     * wie weit der Zieltag entfernt liegt. Deshalb gilt die groessere Zahl
+     * fuer ALLE Arbeitsgaenge einheitlich, nicht nur die drei genannten.
      */
-    const VORZUG_FENSTER_TAGE = 5;
+    const VORZUG_FENSTER_TAGE = 15;
     if (extra.projects && extra.templates) {
       /*
        * Die Platzgrenze allein reicht nicht - sie prueft nur "wie viele
@@ -555,8 +563,10 @@ export function assignPeople(result, config, range = {}, extra = {}) {
             const gruppe = OPERATION_BY_ID[a.opId]?.capacityGroup ?? a.opId;
             const drauf = (personenAn[`${gruppe}#${meineSchicht}`] ??= new Set());
             const plaetzeJeSchicht = plaetzeAm(config, a.opId, day);
+            const plaetzeJeSchichtMax = plaetzeMaxAm(config, a.opId, day);
             const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
-            if (!drauf.has(p.id) && belegt >= plaetzeJeSchicht) continue;
+            if (!drauf.has(p.id) && belegt >= plaetzeJeSchichtMax) continue;
+            const zusatzplatz = !drauf.has(p.id) && belegt >= plaetzeJeSchicht;
             const nimm = round2(Math.min(rest[p.id], a.manHours, freiFuer(a.opId)));
             if (nimm < MINDESTBLOCK && nimm < (rest[p.id] ?? 0) - 0.01) continue;
             if (nimm <= 0.01) continue;
@@ -571,6 +581,8 @@ export function assignPeople(result, config, range = {}, extra = {}) {
               projectId: a.projectId,
               orderNo: projectName.get(a.projectId) ?? a.projectId,
               hours: nimm,
+              /** Kurzfristig ueber die normale Platzgrenze hinaus, siehe plaetzeMaxAm oben */
+              zusatzplatz: zusatzplatz || undefined,
               schicht: meineSchicht,
               /** Vorgezogen von einem spaeteren Tag, siehe Kommentar oben */
               vorgezogen: true,
@@ -729,6 +741,29 @@ function plaetzeAm(config, opId, day) {
   if (plaetze == null || !Number.isFinite(Number(plaetze))) return Number.MAX_SAFE_INTEGER;
   const jePlatz = Math.max(1, Number(workersPerPlace(config, opId) ?? 1));
   return Math.max(1, Math.floor(Number(plaetze) * jePlatz));
+}
+
+/**
+ * Wie viele Personen koennten hoechstens gleichzeitig arbeiten, wenn
+ * KURZFRISTIG ein weiterer Platz eingerichtet wird - "ein zweiter ist bei
+ * Bedarf einrichtbar" (Nutzeranfrage 25.09.2026: "Es kann kurzfristig ein
+ * 2. Sägeplatz aktiviert werden ... Somit kann kein Platzmangel mehr
+ * vorkommen"). Nur als LETZTER Ausweg im Vorzug (siehe dort) gedacht, um
+ * echten Leerlauf zu vermeiden - keine dauerhafte Kapazitaetsplanung
+ * (dafuer gibt es den Mehraufwand/"zweiter Platz" als eigene Massnahme).
+ * Ops ohne hinterlegtes `maxPlaces` (z. B. die Orbital-Maschinen, die man
+ * nicht einfach dazustellt) bleiben bei der normalen Platzgrenze.
+ * @param {any} config @param {string} opId @param {any} day
+ */
+function plaetzeMaxAm(config, opId, day) {
+  const maxPlaces = Number(config.resources?.byOperation?.[opId]?.maxPlaces ?? 0);
+  const plaetze = placesFor(config, opId);
+  if (maxPlaces <= 0 || plaetze == null || !Number.isFinite(Number(plaetze))
+    || maxPlaces <= Number(plaetze)) {
+    return plaetzeAm(config, opId, day);
+  }
+  const jePlatz = Math.max(1, Number(workersPerPlace(config, opId) ?? 1));
+  return Math.max(1, Math.floor(maxPlaces * jePlatz));
 }
 
 /**
