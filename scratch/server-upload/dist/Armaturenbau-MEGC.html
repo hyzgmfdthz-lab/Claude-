@@ -22395,6 +22395,12 @@ function person(id, o = {}) {
  *
  * Die Qualifikationen stehen bewusst zunaechst alle auf "kann" - wer was
  * NICHT darf, wird in der Matrix abgehakt. Erfunden wird hier nichts.
+ *
+ * Nutzerbestaetigung (26.09.2026, Tabelle der Abteilungsleitung): STWUE,
+ * MAAP, JARO, SIDR, SYLA, KEBE, MAJE, LURO und TOBE sind Stammmitarbeiter.
+ * `kind: 'STAMM'` steht hier bei jeder Person ausdruecklich, damit es nicht
+ * nur ueber den Vorgabewert in `person()` gilt, sondern im Datensatz selbst
+ * nachlesbar ist.
  */
 /**
  * Tatsaechlich zugesagte Leiharbeiter (Auskunft der Abteilungsleitung am
@@ -22441,15 +22447,15 @@ function defaultTeam() {
     enforceSkills: true,
     validated: false,
     people: [
-      person('STWUE', { role: 'Vorarbeiter', factor: 0.5, shiftCapable: false, note: 'zur Hälfte in der Fertigung' }),
-      person('MAAP', { shiftCapable: false }),
-      person('JARO'),
-      person('SIDR'),
-      person('SYLA'),
-      person('KEBE'),
-      person('MAJE'),
-      person('LURO'),
-      person('TOBE'),
+      person('STWUE', { kind: 'STAMM', role: 'Vorarbeiter', factor: 0.5, shiftCapable: false, note: 'zur Hälfte in der Fertigung' }),
+      person('MAAP', { kind: 'STAMM', shiftCapable: false }),
+      person('JARO', { kind: 'STAMM' }),
+      person('SIDR', { kind: 'STAMM' }),
+      person('SYLA', { kind: 'STAMM' }),
+      person('KEBE', { kind: 'STAMM' }),
+      person('MAJE', { kind: 'STAMM' }),
+      person('LURO', { kind: 'STAMM' }),
+      person('TOBE', { kind: 'STAMM' }),
       ...leihe,
     ],
   };
