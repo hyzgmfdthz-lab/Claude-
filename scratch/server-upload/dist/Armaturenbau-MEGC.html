@@ -18177,6 +18177,19 @@ function newDayRecord(date, cap) {
       /** Was OHNE Aushilfe moeglich waere - damit ist sie nachrechenbar. */
       capOhneAushilfe: c.capOhneAushilfe ?? c.capUnits,
       aushilfeUnits: 0, aushilfeManHours: 0,
+      /*
+       * FIX (Nutzerfrage 26.09.2026, "warum steht in KW 40 immer noch
+       * Arbeit des Tages vergeben?"): fehlte hier komplett, obwohl
+       * `dayCapacity` es liefert - dadurch sah die Notloesung
+       * (engine/assignment.js, `day?.byOp?.[opId]?.aushilfeVerfuegbar`)
+       * IMMER `undefined`, ganz gleich was in `capacity.js` stand. Der
+       * zweite Saegeplatz/dritte Heftplatz/weitere Vormontage-Platz war
+       * dadurch seit seiner Einfuehrung (Commit 7fdeeca) im echten
+       * Einsatzplan toter Code - nachgewiesen durch echten Test mit den
+       * realen Auftragsdaten der Abteilung: 0 Notloesung-Stunden trotz
+       * hunderter Stunden wartender, platzbedingt blockierter Arbeit.
+       */
+      aushilfeVerfuegbar: c.aushilfeVerfuegbar ?? null,
     };
   }
   return rec;

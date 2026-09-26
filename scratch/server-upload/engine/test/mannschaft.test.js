@@ -247,10 +247,20 @@ test('Einsatzplan verteilt die Stunden auf die Mannschaft', () => {
   const jaro = plan.people.find((p) => p.id === 'JARO');
   assert.ok(stwue.hours < jaro.hours * 0.75, `${stwue.hours} gegen ${jaro.hours}`);
 
-  // Summe der verteilten Stunden plus offene Stunden = eingeplante Stunden
+  /*
+   * Summe der verteilten Stunden plus offene Stunden = eingeplante Stunden.
+   *
+   * Ausnahme (Nutzerentscheidung 25.09.2026): die Notloesung-Aushilfe
+   * (zweiter Saegeplatz/dritter Heftplatz/weiterer Vormontage-Platz) ist
+   * ausdruecklich NICHT in die Terminierung eingepreist - sie verteilt
+   * Stunden, die in `result.allocations` gar nicht vorkommen. Diese
+   * Stunden werden deshalb vor dem Vergleich herausgerechnet.
+   */
   const verteilt = plan.days.reduce((a, d) => a + d.entries.reduce((x, e) => x + e.hours, 0), 0);
+  const notloesung = plan.days.reduce((a, d) => a
+    + d.entries.filter((e) => e.notloesung).reduce((x, e) => x + e.hours, 0), 0);
   const geplant = result.allocations.reduce((a, x) => a + x.manHours, 0);
-  assert.ok(Math.abs(verteilt - geplant) < 1, `${verteilt} gegen ${geplant}`);
+  assert.ok(Math.abs((verteilt - notloesung) - geplant) < 1, `${verteilt - notloesung} gegen ${geplant}`);
 });
 
 test('Einsatzplan gibt nur Arbeit, die die Person auch darf', () => {
@@ -366,12 +376,18 @@ test('Einsatzplan: jede eingeplante Stunde bekommt einen Namen', () => {
   assert.equal(plan.unassignedHours, 0,
     `${plan.unassignedHours} h ohne Namen – die Plätze erlauben Ablösung, das muss aufgehen`);
 
-  // Gegenprobe: die verteilten Stunden sind genau die eingeplanten
+  /*
+   * Gegenprobe: die verteilten Stunden sind genau die eingeplanten - bis
+   * auf die Notloesung-Aushilfe (siehe Kommentar im Test oben), die
+   * ausdruecklich AUSSERHALB des eingeplanten Pools verteilt.
+   */
   const verteilt = plan.days.reduce((a, d) => a
     + d.entries.filter((e) => e.personId).reduce((x, e) => x + e.hours, 0), 0);
+  const notloesung = plan.days.reduce((a, d) => a
+    + d.entries.filter((e) => e.notloesung).reduce((x, e) => x + e.hours, 0), 0);
   const eingeplant = result.daySeries.reduce((a, d) => a + (d.poolUsed ?? 0), 0);
-  assert.ok(Math.abs(verteilt - eingeplant) < 1,
-    `${Math.round(verteilt)} h verteilt gegen ${Math.round(eingeplant)} h eingeplant`);
+  assert.ok(Math.abs((verteilt - notloesung) - eingeplant) < 1,
+    `${Math.round(verteilt - notloesung)} h verteilt gegen ${Math.round(eingeplant)} h eingeplant`);
 });
 
 test('Einsatzplan: an einem Platz stehen nicht mehr Leute, als er zulässt', () => {
@@ -499,9 +515,22 @@ test('Qualifikationsmatrix: der Einsatzplan folgt der Änderung', () => {
   const person = sz.config.workforce.team.people.find((p) => p.id === 'MAAP');
   for (const k of Object.keys(person.skills)) person.skills[k] = (k === 'SAEGEN');
 
-  const nachher = plane().people.find((p) => p.id === 'MAAP');
-  assert.deepEqual(Object.keys(nachher.byOp), ['SAEGEN'],
-    'nach der Änderung darf MAAP nur noch sägen');
+  const nachherResult = plane();
+  const nachher = nachherResult.people.find((p) => p.id === 'MAAP');
+  /*
+   * Nur die QUALIFIZIERTE Arbeit folgt der Matrix - die Notloesung-Aushilfe
+   * (zweiter Saegeplatz/dritter Heftplatz/weiterer Vormontage-Platz) nutzt
+   * bewusst KEINE Qualifikationsmatrix (Nutzerentscheidung 25.09.2026, wie
+   * die bestehende Aushilfe), deshalb wird sie hier herausgefiltert.
+   */
+  const qualifizierteOps = new Set();
+  for (const tag of nachherResult.days) {
+    for (const e of tag.entries) {
+      if (e.personId === 'MAAP' && !e.notloesung) qualifizierteOps.add(e.opId);
+    }
+  }
+  assert.deepEqual([...qualifizierteOps], ['SAEGEN'],
+    'nach der Änderung darf MAAP qualifiziert nur noch sägen');
   assert.ok(nachher.hours !== vorher.hours, 'die Stundenzahl muss sich ändern');
   assert.ok((nachher.idleReasons?.KEINE_QUALIFIKATION ?? 0) > 0,
     'die Tage ohne passende Qualifikation müssen als Grund dastehen');
@@ -757,6 +786,53 @@ test('Aushilfe respektiert die unter Mannschaft/Schichtplanung gesetzte Schicht'
   const maap = tag.entries.find((e) => e.personId === 'MAAP');
   assert.equal(maap, undefined,
     'MAAP steht in Schicht 2, Entgraten läuft nur in Schicht 1 - keine Aushilfe-Zuteilung erlaubt');
+});
+
+test('Notlösung Aushilfe (zweiter Platz "nur bei Bedarf") wirkt durch die echte Terminierung hindurch', () => {
+  /*
+   * FIX (Nutzerfrage 26.09.2026, "warum steht in KW 40 immer noch Arbeit
+   * des Tages vergeben?"): `newDayRecord` (scheduler.js) gab
+   * `aushilfeVerfuegbar` nicht an `result.daySeries` weiter, obwohl
+   * `dayCapacity` es berechnet - die Notloesung sah es dadurch nie, ganz
+   * gleich was in der Konfiguration stand. Alle bisherigen Aushilfe-Tests
+   * oben bauten `result.daySeries` von Hand und deckten genau diesen
+   * Uebergang deshalb nicht ab. Dieser Test geht bewusst durch die ECHTE
+   * Terminierung (`runSchedule`), nicht durch ein handgebautes `result`.
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 2,
+      team: {
+        source: 'MANNSCHAFT', enforceSkills: true,
+        people: [helferPerson('A', { SAEGEN: true }), helferPerson('B', { SAEGEN: true })],
+      },
+    },
+    resources: {
+      byOperation: {
+        SAEGEN: {
+          places: 1, maxPlaces: 2, workersPerPlace: 1,
+          aushilfe: {
+            max: 1, leistung: 1, stundenfaktor: 1, nurBeiBedarf: true,
+            label: 'zweiter Sägeplatz', text: 't',
+          },
+        },
+      },
+    },
+  });
+  const templates = { NEUBAU: { key: 'NEUBAU', steps: [{ opId: 'SAEGEN', hours: 40 }] } };
+  const project = createProject({ projectType: 'NEUBAU', dueDate: '2026-12-01', priority: 'P1' });
+  const result = runSchedule({ config, projects: [project], templates });
+  const plan = assignPeople(result, config, {});
+
+  const notloesungTag = plan.days.find((d) => d.entries.some((e) => e.notloesung));
+  assert.ok(notloesungTag, 'die Notloesung muss an mindestens einem Tag tatsächlich einspringen');
+  const eintrag = notloesungTag.entries.find((e) => e.notloesung);
+  assert.equal(eintrag.opId, 'SAEGEN');
+  assert.equal(eintrag.helfer, true);
+
+  // An diesem Tag müssen dann BEIDE Personen an Sägen stehen - nicht nur eine.
+  const saegenLeute = new Set(notloesungTag.entries.filter((e) => e.opId === 'SAEGEN').map((e) => e.personId));
+  assert.equal(saegenLeute.size, 2, 'der zweite Sägeplatz muss der zweiten Person tatsächlich Arbeit geben');
 });
 
 /* ------------------------------------------------------------------ *
