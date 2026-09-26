@@ -386,8 +386,16 @@ export function workersPerPlace(config, opId) {
  * (siehe scheduler.js) - erst der Einsatzplan (assignment.js) weist ihr
  * tatsaechlich eine Person zu.
  *
+ * `nurBeiBedarf: true` (Nutzerentscheidung 25.09.2026): diese Aushilfe wird
+ * NICHT in die Terminierung eingepreist (siehe dayCapacity weiter unten) -
+ * nur der Einsatzplan (assignment.js) darf sie situativ nutzen, wenn eine
+ * Person sonst wirklich nichts zu tun haette. Ohne das Flag (Standard,
+ * z. B. Orbital/Hydro/Entgraten) rechnet die Terminierung wie bisher von
+ * vornherein damit.
+ *
  * @param {any} config @param {string} opId
- * @returns {{max:number, leistung:number, stundenfaktor:number, label:string, text:string}|null}
+ * @returns {{max:number, leistung:number, stundenfaktor:number, label:string,
+ *   text:string, nurBeiBedarf:boolean}|null}
  */
 export function aushilfeVon(config, opId) {
   const res = config.resources ?? {};
@@ -403,6 +411,7 @@ export function aushilfeVon(config, opId) {
     stundenfaktor: Math.max(1, Number(a.stundenfaktor ?? 1)),
     label: String(a.label ?? 'Aushilfe'),
     text: String(a.text ?? ''),
+    nurBeiBedarf: a.nurBeiBedarf === true,
   };
 }
 
@@ -752,16 +761,42 @@ export function dayCapacity(config, date) {
     const plaetzeBegrenzen = limiter === LIMITER.WORKPLACE || limiter === LIMITER.HYDRO_STATION
       || limiter === LIMITER.BEIZ_STATION || limiter === LIMITER.HEFTPLATZ
       || limiter === LIMITER.ORBITAL_MACHINE;
+    /**
+     * Nur fuer die Anzeige/den Einsatzplan verfuegbar, aber NICHT Teil der
+     * Terminierung (siehe `nurBeiBedarf` unten).
+     * @type {{leistung:number, stundenfaktor:number, max:number, label:string, manHours:number}|null}
+     */
+    let aushilfeVerfuegbar = null;
     if (hilfe && plaetzeBegrenzen && capUnits > 0) {
       const zusatz = hilfe.max * hilfe.leistung * opWindow * prod;
-      detail.aushilfe = {
-        label: hilfe.label,
-        text: hilfe.text,
-        einheiten: round2(zusatz),
-        stundenfaktor: hilfe.stundenfaktor,
-        ohneAushilfe: round2(capUnits),
-      };
-      capUnits += zusatz;
+      /*
+       * `nurBeiBedarf` (Nutzerentscheidung 25.09.2026, nach den Folgen des
+       * ersten Versuchs - siehe defaults.js/SAEGEN): die Terminierung
+       * rechnet NICHT von vornherein mit dieser Kapazitaet, sie wird nur
+       * noch als MOEGLICHKEIT ausgewiesen. Frueher (Sägen+Heften+Vormontage
+       * gleichzeitig fest eingeplant) fuehrte das dazu, dass die
+       * Terminierung von einer Mannschaft ausging, die an denselben Tagen
+       * gleichzeitig alle Zusatzplaetze UND die bestehenden Arbeitsgaenge
+       * bedienen kann - real gab es dafuer nicht genug Leute
+       * (BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT, 729 h ohne Namen). Statt
+       * dessen nutzt engine/assignment.js diesen Wert situativ: nur an
+       * einem Tag, an dem eine Person sonst wirklich nichts zu tun haette.
+       */
+      if (hilfe.nurBeiBedarf) {
+        aushilfeVerfuegbar = {
+          leistung: hilfe.leistung, stundenfaktor: hilfe.stundenfaktor, max: hilfe.max,
+          label: hilfe.label, manHours: round2(zusatz * f * hilfe.stundenfaktor),
+        };
+      } else {
+        detail.aushilfe = {
+          label: hilfe.label,
+          text: hilfe.text,
+          einheiten: round2(zusatz),
+          stundenfaktor: hilfe.stundenfaktor,
+          ohneAushilfe: round2(capUnits),
+        };
+        capUnits += zusatz;
+      }
     }
 
     // Wochentagsregel der Abteilung (siehe rules.js)
@@ -804,6 +839,11 @@ export function dayCapacity(config, date) {
       /** Was OHNE Aushilfe moeglich waere - damit ist sie nachrechenbar. */
       capOhneAushilfe: round2(Math.max(0, detail.aushilfe ? detail.aushilfe.ohneAushilfe : capUnits)),
       aushilfeStundenfaktor: detail.aushilfe ? detail.aushilfe.stundenfaktor : 1,
+      /**
+       * Nur situativ nutzbar (siehe `nurBeiBedarf` oben) - NICHT Teil der
+       * Terminierung, nur eine Angabe fuer den Einsatzplan.
+       */
+      aushilfeVerfuegbar,
       limiter,
       detail,
     };

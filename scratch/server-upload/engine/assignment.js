@@ -254,6 +254,8 @@ export function assignPeople(result, config, range = {}, extra = {}) {
     const personenAn = {};
     /** Heute liegengebliebene Stunden je Arbeitsgang (fuer den Luecken-Report) */
     const restHeute = {};
+    /** Wie viel von `aushilfeVerfuegbar` heute schon als Notloesung genutzt wurde */
+    const notloesungGenutzt = new Map();
 
     // Arbeit des Tages je Arbeitsgang zusammenfassen - ein Arbeitsgang mit
     // drei Auftraegen ist drei Positionen, aber dieselben Plaetze.
@@ -492,6 +494,65 @@ export function assignPeople(result, config, range = {}, extra = {}) {
             jeSchicht,
           });
         }
+      }
+    }
+
+    /*
+     * Notloesung Aushilfe (Nutzerentscheidung 25.09.2026, nach den Folgen
+     * eines ersten, verworfenen Versuchs: "situative Nutzung ... wichtig
+     * ist, dass Personal sauber einsetzbar ist und niemand ohne Arbeit
+     * dasteht - so ist das Maximale aus dem vorhandenen Personal."):
+     * zweiter Sägeplatz, dritter Heftplatz, weiterer Vormontage-Platz
+     * (`aushilfeVerfuegbar` in capacity.js, `nurBeiBedarf`) sind NICHT in
+     * die Terminierung eingepreist - sie werden hier, NUR an diesem Tag,
+     * NUR fuer eine Person, die sonst wirklich nichts zu tun haette,
+     * genutzt. Genommen wird nur, was die Terminierung selbst als
+     * PLATZ-verursachten Rueckstand ausweist (`result.blocked`, stauAm) -
+     * nichts wird erfunden. Ohne Qualifikationsmatrix, wie die bestehende
+     * Aushilfe oben (`versucheAushilfe`).
+     */
+    for (const p of anwesend) {
+      if (heuteAn[p.id]?.length) continue;
+      if ((rest[p.id] ?? 0) <= 0.01) continue;
+      const meineSchicht = schichtVon[p.id] ?? 1;
+      const kandidaten = (stauAm.get(date) ?? [])
+        .filter((b) => !b.info && b.manHours > 0.01
+          && day?.byOp?.[b.opId]?.aushilfeVerfuegbar
+          && Math.floor(schichtenJeOp[b.opId] ?? 1) >= meineSchicht)
+        .sort((x, y) => y.manHours - x.manHours);
+      for (const b of kandidaten) {
+        if ((rest[p.id] ?? 0) <= 0.01) break;
+        const verfuegbar = day.byOp[b.opId].aushilfeVerfuegbar;
+        const schluessel = `${b.opId}|notloesung`;
+        const bisherGenutzt = notloesungGenutzt.get(schluessel) ?? 0;
+        const frei = round2(Math.max(0, verfuegbar.manHours - bisherGenutzt));
+        if (frei <= 0.01) continue;
+        const gruppe = OPERATION_BY_ID[b.opId]?.capacityGroup ?? b.opId;
+        const drauf = (personenAn[`${gruppe}#${meineSchicht}`] ??= new Set());
+        const plaetzeJeSchichtMax = plaetzeMaxAm(config, b.opId, day);
+        const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
+        if (!drauf.has(p.id) && belegt >= plaetzeJeSchichtMax) continue;
+        const nimm = round2(Math.min(rest[p.id], b.manHours, frei));
+        if (nimm <= 0.01) continue;
+        drauf.add(p.id);
+        (heuteAn[p.id] ??= []).push(b.opId);
+        rest[p.id] = round2(rest[p.id] - nimm);
+        notloesungGenutzt.set(schluessel, round2(bisherGenutzt + nimm));
+        eintraege.push({
+          personId: p.id, opId: b.opId, opName: OPERATION_BY_ID[b.opId]?.name ?? b.opId,
+          projectId: b.projectId,
+          orderNo: projectName.get(b.projectId) ?? b.projectId,
+          hours: nimm,
+          schicht: meineSchicht,
+          /** Situative Notloesung, siehe Kommentar oben - keine Qualifikationsmatrix noetig */
+          helfer: true,
+          notloesung: true,
+        });
+        const bp = byPerson[p.id];
+        bp.hours = round2(bp.hours + nimm);
+        bp.byOp[b.opId] = round2((bp.byOp[b.opId] ?? 0) + nimm);
+        const wk = weekKey(date);
+        bp.byWeek[wk] = round2((bp.byWeek[wk] ?? 0) + nimm);
       }
     }
 

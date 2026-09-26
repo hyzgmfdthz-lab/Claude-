@@ -295,7 +295,40 @@ export function defaultPlaces() {
      * belegt und ausdruecklich zu validieren.
      */
     AV: { places: 1, maxPlaces: 2, workersPerPlace: 1, note: 'ein Vorgang gleichzeitig – zu validieren' },
-    SAEGEN: { places: 1, maxPlaces: 2, workersPerPlace: 1, note: 'ein Platz, ein zweiter ist bei Bedarf einrichtbar' },
+    /*
+     * Saegen: zweiter Platz (Nutzerklarstellung 25.09.2026: "2. Sägeplatz"
+     * ist KEIN Helfer, der jemandem zuarbeitet, sondern ein vollwertiger,
+     * unabhaengiger Zusatzplatz - eine zweite Person saegt fuer sich,
+     * volle Leistung).
+     *
+     * `nurBeiBedarf: true` (Nutzerentscheidung 25.09.2026, nach Ruecksprache
+     * ueber die Folgen des ersten Versuchs): NICHT fest in die Terminierung
+     * eingeplant wie Orbital/Hydro/Entgraten. Der erste Versuch (voll
+     * eingeplant fuer Saegen+Heften+Vormontage gleichzeitig) hat die
+     * Termintreue-Prognose zu optimistisch gemacht - die Terminierung ging
+     * von einer Mannschaft aus, die an denselben Tagen gleichzeitig alle
+     * drei Zusatzplaetze UND die bestehenden Arbeitsgaenge bedienen kann.
+     * Nachgewiesen: 729 zusaetzliche Personenstunden ohne jede Person,
+     * die sie machen konnte (BUDGET_DER_QUALIFIZIERTEN_AUSGESCHOEPFT).
+     * Nutzervorgabe danach: "wichtig ist, dass Personal sauber einsetzbar
+     * ist und niemand ohne Arbeit dasteht - das Maximale aus dem
+     * vorhandenen Personal." Deshalb bleibt die Tageskapazitaet
+     * (capUnits/capManHours) unveraendert wie vor dieser Aenderung - der
+     * Platz wird nur in engine/assignment.js genutzt, und zwar nur an
+     * einem Tag, an dem sonst wirklich niemand mehr zu tun haette (siehe
+     * dort). Werte NICHT von der Abteilung bestaetigt (validated: false).
+     */
+    SAEGEN: {
+      places: 1, maxPlaces: 2, workersPerPlace: 1,
+      aushilfe: {
+        max: 1, leistung: 1, stundenfaktor: 1, validated: false, nurBeiBedarf: true,
+        label: 'zweiter Sägeplatz',
+        text: 'Ein zweiter Mitarbeiter sägt unabhängig an einem eigenen Platz, volle Leistung - '
+          + 'nur wenn sonst niemand mehr zu tun hätte (Wert vorläufig von der Hydroprüfung '
+          + 'übernommen, noch zu bestätigen).',
+      },
+      note: 'ein Platz, ein zweiter ist bei Bedarf einrichtbar',
+    },
     /*
      * Entgraten: eine Maschine fuer einen Mann. Im Engpass kann ein
      * zweiter von Hand entgraten - langsamer, aber es verkuerzt den
@@ -317,7 +350,29 @@ export function defaultPlaces() {
       note: 'ein Platz, eine Person – im Engpass kann von Hand mitgeholfen werden',
     },
     BIEGEN: { places: 1, workersPerPlace: 1 },
+    /*
+     * Beizen: AUSDRUECKLICH KEINE Helfer-Moeglichkeit (Nutzerklarstellung
+     * 25.09.2026: "Beim beizen haben wir keine Helfer möglichkeit") -
+     * bewusst ohne aushilfe-Feld, anders als Saegen/Heften/Vormontage.
+     */
     BEIZEN: { places: 1, workersPerPlace: 1 },
+    /*
+     * Heften: kein eigener `places`-Eintrag hier - die Platzzahl kommt
+     * weiterhin aus dem alten Feld `heftPlaces` (siehe placesFor in
+     * capacity.js), nur die Aushilfe wird hier ergaenzt. Dritter Heftplatz:
+     * vollwertiger Zusatzplatz wie beim zweiten Saegeplatz, `nurBeiBedarf:
+     * true` aus demselben Grund (siehe Saegen oben) - NICHT fest in die
+     * Terminierung eingeplant, nur situativ in assignment.js genutzt.
+     */
+    HEFTEN: {
+      aushilfe: {
+        max: 1, leistung: 1, stundenfaktor: 1, validated: false, nurBeiBedarf: true,
+        label: 'dritter Heftplatz',
+        text: 'Ein dritter Mitarbeiter heftet unabhängig an einem eigenen Platz, volle Leistung - '
+          + 'nur wenn sonst niemand mehr zu tun hätte (Wert vorläufig von der Hydroprüfung '
+          + 'übernommen, noch zu bestätigen).',
+      },
+    },
     /*
      * Orbital Kehlnaht/Stumpfnaht (Nutzerauftrag 24.09.2026): "die 2 MA
      * gehen notfalls als Helfer bei einem anderen Arbeitsgang
@@ -350,7 +405,24 @@ export function defaultPlaces() {
      * Arbeitsplaetze und 2 Personen, pro Arbeitsplatz eine Person. Noch
      * mehr Plaetze waeren machbar wenn noetig."
      */
-    VORMONTAGE: { places: 2, maxPlaces: 4, workersPerPlace: 1, note: 'zwei Plätze, je eine Person – weitere Plätze sind bei Bedarf machbar' },
+    /*
+     * Weiterer Vormontage-Platz: KEIN Helfer, der zuarbeitet, sondern ein
+     * vollwertiger, unabhaengiger Zusatzplatz - dieselbe Bauart wie beim
+     * zweiten Saegeplatz (`leistung: 1`). `nurBeiBedarf: true` aus
+     * demselben Grund wie dort - NICHT fest in die Terminierung eingeplant,
+     * nur situativ in assignment.js genutzt. Werte NICHT bestaetigt.
+     */
+    VORMONTAGE: {
+      places: 2, maxPlaces: 4, workersPerPlace: 1,
+      aushilfe: {
+        max: 1, leistung: 1, stundenfaktor: 1, validated: false, nurBeiBedarf: true,
+        label: 'weiterer Vormontage-Platz',
+        text: 'Ein weiterer Mitarbeiter montiert unabhängig an einem eigenen Platz, volle Leistung - '
+          + 'nur wenn sonst niemand mehr zu tun hätte (Wert vorläufig von der Hydroprüfung '
+          + 'übernommen, noch zu bestätigen).',
+      },
+      note: 'zwei Plätze, je eine Person – weitere Plätze sind bei Bedarf machbar',
+    },
     /*
      * Hydropruefung: ein Pruefstand. Einer kann vormontieren und dem
      * Pruefer zuarbeiten.
@@ -383,6 +455,12 @@ export function defaultPlaces() {
      * von der Abteilung bestaetigten Werte vor - leistung/stundenfaktor
      * sind vorlaeufig 1:1 von Hydro uebernommen (validated: false) und
      * muessen noch bestaetigt werden.
+     *
+     * Eine ZUSAETZLICHE, vollwertige "weiterer Platz"-Option (wie bei
+     * Saegen/Heften/Vormontage) wurde am 25.09.2026 angefragt, aber noch
+     * NICHT umgesetzt - die Nutzerentscheidung, nach den Folgen des ersten
+     * (verworfenen) Versuchs auf eine situative Loesung umzustellen, kam
+     * dazwischen. Bleibt offen fuer einen spaeteren, gezielten Nachtrag.
      */
     ENDKONTROLLE: {
       places: 2, maxPlaces: 3, workersPerPlace: 1,
