@@ -904,6 +904,60 @@ test('Endkontrolle: dritter Prüfstand (Zusatzplatz) UND Zuarbeiten-Helfer wirke
   assert.equal(stunden[0], 3.75, 'der Zuarbeiten-Helfer (halbe Leistung) bleibt neben dem Zusatzplatz wirksam');
 });
 
+test('Entgraten situativ: der Stundenfaktor (doppelte Arbeitszeit) gilt auch in der Notlösung', () => {
+  /*
+   * Nutzerauftrag 27.09.2026: "Den Handhelfer generell fest mit
+   * einzuplanen halte ich für sehr ineffizient" - Entgraten wurde deshalb
+   * auf `nurBeiBedarf` umgestellt (wie der zweite Sägeplatz).
+   *
+   * Beim Umstellen entdeckt: `stauAm`/`b.manHours` (der wartende
+   * Rückstand) ist in INHALTS-Stunden (normales Maschinentempo), aber
+   * `rest`/`aushilfeVerfuegbar.manHours` sind ARBEITSZEIT-Stunden der
+   * Person. Bei Entgraten braucht eine Person von Hand die DOPPELTE
+   * Arbeitszeit fuer dieselbe Menge (`stundenfaktor: 2`) - ohne Umrechnung
+   * haette die alte Formel `min(rest, b.manHours, frei)` einer Person mit
+   * 3 h Inhalts-Rückstand nur 3 statt der tatsächlich nötigen 6
+   * Arbeitszeit-Stunden gegeben (halbe statt volle Menge verrechnet).
+   *
+   * Direkt auf assignPeople() konstruiert (wie die Aushilfe-Tests oben),
+   * um `b.manHours` (Rückstand) und `aushilfeVerfuegbar.manHours`
+   * (Zeitbudget) unabhängig auf realistische, aber UNTERSCHIEDLICHE Werte
+   * zu setzen - nur so wird der Umrechnungsfehler sichtbar (bei einer
+   * echten Terminierung ist der Rückstand fast immer so gross, dass er
+   * nie die bindende Grenze ist).
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 1,
+      team: { source: 'MANNSCHAFT', enforceSkills: true, people: [helferPerson('B', { ENTGRATEN: true })] },
+    },
+  });
+  const date = '2026-09-21';
+  const result = {
+    config, projects: [], allocations: [],
+    blocked: [{ date, projectId: 'P1', opId: 'ENTGRATEN', manHours: 3, cause: 'WORKPLACE' }],
+    daySeries: [{
+      date, kind: 'REGULAR', weekKey: '2026-W39', hoursPerEmployee: 7.5, productivity: 1,
+      byOp: {
+        ENTGRATEN: {
+          aushilfeVerfuegbar: {
+            leistung: 0.5, stundenfaktor: 2, max: 1, label: 'von Hand entgraten', manHours: 7.5,
+          },
+        },
+      },
+    }],
+  };
+
+  const plan = assignPeople(result, config, {});
+  const tag = plan.days.find((d) => d.date === date);
+  const b = tag.entries.find((e) => e.personId === 'B');
+  assert.ok(b, 'B muss über die Notlösung Arbeit bekommen');
+  assert.equal(b.notloesung, true);
+  assert.equal(b.hours, 6,
+    '3 h Inhalts-Rückstand kosten von Hand die DOPPELTE Arbeitszeit (6 h), nicht 3 h - '
+    + `tatsächlich: ${b.hours} h`);
+});
+
 /* ------------------------------------------------------------------ *
  * Luecken-Report (Nutzeranforderung 25.09.2026)
  * ------------------------------------------------------------------ */

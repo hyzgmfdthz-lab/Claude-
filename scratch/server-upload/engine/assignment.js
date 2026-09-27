@@ -532,8 +532,20 @@ export function assignPeople(result, config, range = {}, extra = {}) {
         const plaetzeJeSchichtMax = plaetzeMaxAm(config, b.opId, day);
         const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
         if (!drauf.has(p.id) && belegt >= plaetzeJeSchichtMax) continue;
-        const nimm = round2(Math.min(rest[p.id], b.manHours, frei));
-        if (nimm <= 0.01) continue;
+        /*
+         * FIX (Nutzerauftrag 27.09.2026, beim Umstellen von Entgraten auf
+         * situativ entdeckt): `b.manHours` ist der wartende RUECKSTAND in
+         * INHALTS-Stunden (normales Tempo) - `rest`/`frei` sind dagegen
+         * ARBEITSZEIT-Stunden der Person. Bei `stundenfaktor` 1 (Saegen,
+         * Heften, Vormontage, Endkontrolle-Zusatzplatz) ist das dasselbe,
+         * bei Entgraten (von Hand: doppelte Arbeitszeit fuer dieselbe
+         * Menge, `stundenfaktor: 2`) NICHT - ohne Umrechnung haette die
+         * Person nur die Haelfte der noetigen Zeit gebraucht bekommen.
+         */
+        const stundenfaktor = Math.max(1, Number(verfuegbar.stundenfaktor ?? 1));
+        const nimmZeit = round2(Math.min(rest[p.id], frei, b.manHours * stundenfaktor));
+        if (nimmZeit <= 0.01) continue;
+        const nimm = nimmZeit;
         drauf.add(p.id);
         (heuteAn[p.id] ??= []).push(b.opId);
         rest[p.id] = round2(rest[p.id] - nimm);

@@ -338,16 +338,28 @@ export function defaultPlaces() {
      * Maschine in 3,75 h.
      * `stundenfaktor: 2` - dieselbe Menge kostet deshalb die DOPPELTE
      * Arbeitszeit. Ohne diesen Faktor waere die Aushilfe geschenkt.
+     *
+     * `nurBeiBedarf: true` (Nutzerentscheidung 27.09.2026): war bis hierher
+     * fest eingeplant, wie urspruenglich bei Saegen/Heften/Vormontage - "den
+     * Handhelfer generell fest mit einzuplanen halte ich für sehr
+     * ineffizient". Dieselbe Ueberlegung, die dort zur situativen Loesung
+     * fuehrte (siehe Kommentar bei SAEGEN oben): eine feste Planung nimmt
+     * an, dass am Bedarfstag IMMER ein sonst freier, qualifizierter
+     * Mitarbeiter zur Verfuegung steht - real kann das an genau dem Tag
+     * jemand ganz anderes sein oder niemand. Jetzt situativ wie der zweite
+     * Saegeplatz: nur genutzt, wenn eine Person sonst wirklich nichts zu
+     * tun haette.
      */
     ENTGRATEN: {
       places: 1, maxPlaces: 2, workersPerPlace: 1,
       aushilfe: {
-        max: 1, leistung: 0.5, stundenfaktor: 2, validated: true,
+        max: 1, leistung: 0.5, stundenfaktor: 2, validated: true, nurBeiBedarf: true,
         label: 'von Hand entgraten',
         text: 'Ein zweiter Mitarbeiter entgratet von Hand: halbe Leistung, doppelte Arbeitszeit '
-          + 'für dieselbe Menge – dafür ist der Arbeitsgang schneller durch.',
+          + 'für dieselbe Menge – dafür ist der Arbeitsgang schneller durch. Nur wenn sonst '
+          + 'niemand mehr zu tun hätte.',
       },
-      note: 'ein Platz, eine Person – im Engpass kann von Hand mitgeholfen werden',
+      note: 'ein Platz, eine Person – im Engpass kann bei Bedarf von Hand mitgeholfen werden',
     },
     BIEGEN: { places: 1, workersPerPlace: 1 },
     /*

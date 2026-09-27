@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Armaturenbau MEGC – Produktionsplanung</title>
-<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-26">
+<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-27">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%2300727a'/><path d='M22 70V30h11v15h12V30h11v40H45V55H33v15z' fill='white'/></svg>">
 <style>
 /* ==================================================================
@@ -16020,16 +16020,28 @@ function defaultPlaces() {
      * Maschine in 3,75 h.
      * `stundenfaktor: 2` - dieselbe Menge kostet deshalb die DOPPELTE
      * Arbeitszeit. Ohne diesen Faktor waere die Aushilfe geschenkt.
+     *
+     * `nurBeiBedarf: true` (Nutzerentscheidung 27.09.2026): war bis hierher
+     * fest eingeplant, wie urspruenglich bei Saegen/Heften/Vormontage - "den
+     * Handhelfer generell fest mit einzuplanen halte ich für sehr
+     * ineffizient". Dieselbe Ueberlegung, die dort zur situativen Loesung
+     * fuehrte (siehe Kommentar bei SAEGEN oben): eine feste Planung nimmt
+     * an, dass am Bedarfstag IMMER ein sonst freier, qualifizierter
+     * Mitarbeiter zur Verfuegung steht - real kann das an genau dem Tag
+     * jemand ganz anderes sein oder niemand. Jetzt situativ wie der zweite
+     * Saegeplatz: nur genutzt, wenn eine Person sonst wirklich nichts zu
+     * tun haette.
      */
     ENTGRATEN: {
       places: 1, maxPlaces: 2, workersPerPlace: 1,
       aushilfe: {
-        max: 1, leistung: 0.5, stundenfaktor: 2, validated: true,
+        max: 1, leistung: 0.5, stundenfaktor: 2, validated: true, nurBeiBedarf: true,
         label: 'von Hand entgraten',
         text: 'Ein zweiter Mitarbeiter entgratet von Hand: halbe Leistung, doppelte Arbeitszeit '
-          + 'für dieselbe Menge – dafür ist der Arbeitsgang schneller durch.',
+          + 'für dieselbe Menge – dafür ist der Arbeitsgang schneller durch. Nur wenn sonst '
+          + 'niemand mehr zu tun hätte.',
       },
-      note: 'ein Platz, eine Person – im Engpass kann von Hand mitgeholfen werden',
+      note: 'ein Platz, eine Person – im Engpass kann bei Bedarf von Hand mitgeholfen werden',
     },
     BIEGEN: { places: 1, workersPerPlace: 1 },
     /*
@@ -25042,8 +25054,20 @@ function assignPeople(result, config, range = {}, extra = {}) {
         const plaetzeJeSchichtMax = plaetzeMaxAm(config, b.opId, day);
         const belegt = [...drauf].filter((id) => (rest[id] ?? 0) > 0.01).length;
         if (!drauf.has(p.id) && belegt >= plaetzeJeSchichtMax) continue;
-        const nimm = round2(Math.min(rest[p.id], b.manHours, frei));
-        if (nimm <= 0.01) continue;
+        /*
+         * FIX (Nutzerauftrag 27.09.2026, beim Umstellen von Entgraten auf
+         * situativ entdeckt): `b.manHours` ist der wartende RUECKSTAND in
+         * INHALTS-Stunden (normales Tempo) - `rest`/`frei` sind dagegen
+         * ARBEITSZEIT-Stunden der Person. Bei `stundenfaktor` 1 (Saegen,
+         * Heften, Vormontage, Endkontrolle-Zusatzplatz) ist das dasselbe,
+         * bei Entgraten (von Hand: doppelte Arbeitszeit fuer dieselbe
+         * Menge, `stundenfaktor: 2`) NICHT - ohne Umrechnung haette die
+         * Person nur die Haelfte der noetigen Zeit gebraucht bekommen.
+         */
+        const stundenfaktor = Math.max(1, Number(verfuegbar.stundenfaktor ?? 1));
+        const nimmZeit = round2(Math.min(rest[p.id], frei, b.manHours * stundenfaktor));
+        if (nimmZeit <= 0.01) continue;
+        const nimm = nimmZeit;
         drauf.add(p.id);
         (heuteAn[p.id] ??= []).push(b.opId);
         rest[p.id] = round2(rest[p.id] - nimm);
