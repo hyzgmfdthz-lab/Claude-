@@ -34,7 +34,7 @@
 
 import { OPERATIONS, OPERATION_BY_ID, round1, round2 } from './model.js';
 import { placesFor, workersPerPlace } from './capacity.js';
-import { shiftCapability } from './team.js';
+import { shiftCapability, peopleOf } from './team.js';
 import { blockedByOperation, blockedByOperationWoche } from './kpi.js';
 import { weekKey } from './calendar.js';
 
@@ -274,8 +274,8 @@ export function planeSchichten(input, result, rechne, opts = {}) {
     for (const [opId, b] of kandidaten) {
       if (verworfen.has(opId)) continue;
       const naechste = Math.min(MAX_SCHICHTEN, Math.floor(schichten[opId]) + 1);
-      const gebraucht = gebrauchteSchichtkoepfe({ ...schichten, [opId]: naechste }, config);
-      if (gebraucht > faehig.capable) {
+      const kandidatSchichten = { ...schichten, [opId]: naechste };
+      if (!schichtstandMachbar(kandidatSchichten, config)) {
         schritte.push({
           opId,
           name: OPERATION_BY_ID[opId]?.name ?? opId,
@@ -283,7 +283,7 @@ export function planeSchichten(input, result, rechne, opts = {}) {
           nach: naechste,
           angewendet: false,
           grund: 'ZU_WENIG_SCHICHTFAEHIG',
-          gebraucht,
+          gebraucht: gebrauchteSchichtkoepfe(kandidatSchichten, config),
           vorhanden: faehig.capable,
           stau: round1(b.manHours),
         });
@@ -291,7 +291,6 @@ export function planeSchichten(input, result, rechne, opts = {}) {
         continue;
       }
 
-      const naechsterStand = { ...schichten, [opId]: naechste };
       const naechsteConfig = mitEinemKandidaten(config, opId, naechste);
       const gerechnet = rechne(naechsteConfig);
 
@@ -335,7 +334,7 @@ export function planeSchichten(input, result, rechne, opts = {}) {
       });
       if (!bringt) { verworfen.add(opId); continue; }
 
-      schichten = naechsterStand;
+      schichten = kandidatSchichten;
       config = naechsteConfig;
       stand = gerechnet;
       uebernommen = true;
@@ -654,6 +653,117 @@ export function gebrauchteSchichtkoepfe(schichten, config) {
     summe += zusatz * koepfeJeSchicht(config, opId);
   }
   return summe;
+}
+
+/**
+ * Maximaler Fluss (Edmonds-Karp/BFS) - Hilfsfunktion fuer
+ * `schichtstandMachbar` unten. Bei dieser Groesse (ein paar Dutzend Knoten:
+ * Personen plus Arbeitsgang/Schichtstufe-Paare) ist eine einfache
+ * BFS-Implementierung schnell genug - ein ausgereifterer Algorithmus waere
+ * fuer diesen Umfang unnoetiger Aufwand.
+ * @param {number} numNodes @param {[number, number, number][]} kanten [von, nach, kapazitaet]
+ * @param {number} quelle @param {number} senke
+ */
+function maxFlow(numNodes, kanten, quelle, senke) {
+  const graph = Array.from({ length: numNodes }, () => /** @type {{to:number, cap:number, rev:number}[]} */ ([]));
+  for (const [u, v, cap] of kanten) {
+    graph[u].push({ to: v, cap, rev: graph[v].length });
+    graph[v].push({ to: u, cap: 0, rev: graph[u].length - 1 });
+  }
+  let fluss = 0;
+  for (;;) {
+    const vorgaengerKnoten = new Array(numNodes).fill(-1);
+    const vorgaengerKante = new Array(numNodes).fill(-1);
+    vorgaengerKnoten[quelle] = quelle;
+    const queue = [quelle];
+    for (let qi = 0; qi < queue.length && vorgaengerKnoten[senke] === -1; qi++) {
+      const u = queue[qi];
+      for (let i = 0; i < graph[u].length; i++) {
+        const kante = graph[u][i];
+        if (kante.cap > 0 && vorgaengerKnoten[kante.to] === -1) {
+          vorgaengerKnoten[kante.to] = u;
+          vorgaengerKante[kante.to] = i;
+          queue.push(kante.to);
+        }
+      }
+    }
+    if (vorgaengerKnoten[senke] === -1) break;
+    let zusatzfluss = Infinity;
+    for (let v = senke; v !== quelle; v = vorgaengerKnoten[v]) {
+      zusatzfluss = Math.min(zusatzfluss, graph[vorgaengerKnoten[v]][vorgaengerKante[v]].cap);
+    }
+    for (let v = senke; v !== quelle; v = vorgaengerKnoten[v]) {
+      const kante = graph[vorgaengerKnoten[v]][vorgaengerKante[v]];
+      kante.cap -= zusatzfluss;
+      graph[kante.to][kante.rev].cap += zusatzfluss;
+    }
+    fluss += zusatzfluss;
+  }
+  return fluss;
+}
+
+/**
+ * Qualifikationsechte Machbarkeit eines Schichtstandes (Nutzerauftrag
+ * 27.09.2026: "geh das an" - die Naherungspruefung ueber
+ * `gebrauchteSchichtkoepfe`/`faehig.capable` zaehlte nur INSGESAMT
+ * schichtfaehige Koepfe, ohne zu pruefen, ob dieselben Personen ueberhaupt
+ * fuer die betroffenen Arbeitsgaenge qualifiziert sind - mehrere
+ * gleichzeitig hochgesetzte Arbeitsgaenge, die sich dieselbe knappe,
+ * geteilte Mannschaft teilen muessen, wurden dadurch als "machbar"
+ * angenommen, obwohl real niemand fuer die Kombination qualifiziert war
+ * (Nutzerpruefung 26.-27.09.2026: 269,9 bis 779,7 Stunden
+ * "Budget der Qualifizierten ausgeschoepft" trotz "genug Koepfe
+ * insgesamt").
+ *
+ * Modelliert als Fluss-Problem: jede eingeplante, schichtfaehige Person
+ * darf hoechstens EINE zusaetzliche Schicht uebernehmen (Kapazitaet 1 ab
+ * der Quelle); von dort zu jedem (Arbeitsgang, Schichtstufe)-Paar, fuer
+ * das sie qualifiziert ist; von dort zur Senke mit der tatsaechlich
+ * benoetigten Kopfzahl je Paar. Der Schichtstand ist nur machbar, wenn der
+ * maximale Fluss den GESAMTEN Bedarf deckt - das erkennt sowohl "insgesamt
+ * zu wenig schichtfaehige Leute" als auch "genug Koepfe insgesamt, aber
+ * keiner davon fuer DIESE Kombination qualifiziert".
+ *
+ * Ohne gepflegte Mannschaftsliste (Modus ZAHLEN ohne Personen) faellt die
+ * Pruefung auf die alte, grobe Kopfzahl zurueck - ohne Namen gibt es
+ * nichts, wogegen man Qualifikationen pruefen koennte.
+ * @param {Record<string, number>} schichten @param {any} config
+ */
+export function schichtstandMachbar(schichten, config) {
+  /** @type {{opId:string, stufe:number, koepfe:number}[]} */
+  const bedarf = [];
+  for (const [opId, n] of Object.entries(schichten)) {
+    const stufen = Math.max(1, Math.floor(n));
+    for (let stufe = 2; stufe <= stufen; stufe++) {
+      bedarf.push({ opId, stufe, koepfe: koepfeJeSchicht(config, opId) });
+    }
+  }
+  if (bedarf.length === 0) return true;
+
+  const leute = peopleOf(config)
+    .filter((p) => p.defaultActive !== false || Object.values(p.weeks ?? {}).some(Boolean))
+    .filter((p) => p.shiftCapable !== false);
+  const gesamtBedarf = bedarf.reduce((a, b) => a + b.koepfe, 0);
+  if (leute.length === 0) {
+    // Keine gepflegte Mannschaft - grobe Kopfzahl bleibt die einzige Auskunft.
+    return gesamtBedarf <= shiftCapability(config).capable;
+  }
+
+  // Knoten: 0 = Quelle, 1 = Senke, 2..2+P-1 = Personen, danach je Bedarf ein Knoten.
+  const quelle = 0; const senke = 1;
+  const personBasis = 2;
+  const bedarfBasis = personBasis + leute.length;
+  const numNodes = bedarfBasis + bedarf.length;
+  /** @type {[number, number, number][]} */
+  const kanten = [];
+  for (let i = 0; i < leute.length; i++) kanten.push([quelle, personBasis + i, 1]);
+  for (let j = 0; j < bedarf.length; j++) kanten.push([bedarfBasis + j, senke, bedarf[j].koepfe]);
+  for (let i = 0; i < leute.length; i++) {
+    for (let j = 0; j < bedarf.length; j++) {
+      if (leute[i].skills?.[bedarf[j].opId]) kanten.push([personBasis + i, bedarfBasis + j, leute.length]);
+    }
+  }
+  return maxFlow(numNodes, kanten, quelle, senke) >= gesamtBedarf;
 }
 
 /**

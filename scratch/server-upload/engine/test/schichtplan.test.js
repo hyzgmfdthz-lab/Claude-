@@ -21,7 +21,7 @@ import { testConfig } from './helpers.js';
 import {
   MAX_SCHICHTEN, SCHICHT_STUNDEN, schichtenAus, stundenFuer, schichtenJeArbeitsgang,
   eingestellteStunden, koepfeJeSchicht, gebrauchteSchichtkoepfe, mitSchichten,
-  planeSchichten, fehlendePlaetze, wochenSchichten,
+  planeSchichten, fehlendePlaetze, wochenSchichten, schichtstandMachbar,
 } from '../schichtplan.js';
 
 function stand(mut = (c) => c) {
@@ -146,6 +146,47 @@ test('Der Vorschlag verlangt nie mehr schichtfähige Leute als vorhanden', () =>
   const gebraucht = gebrauchteSchichtkoepfe(v.schichten, mitSchichten(input.config, v.schichten));
   assert.ok(gebraucht <= v.schichtfaehig,
     `der Plan braucht ${gebraucht} schichtfähige Leute, es sind ${v.schichtfaehig}`);
+});
+
+test('Schichtstand ist nur machbar, wenn die BESTIMMTEN Personen dafür qualifiziert sind, '
+  + 'nicht nur genug Köpfe insgesamt', () => {
+  /*
+   * Nutzerauftrag 27.09.2026 ("geh das an"): die alte Pruefung
+   * (`gebrauchteSchichtkoepfe` gegen `faehig.capable`) zaehlte nur die
+   * GESAMTZAHL schichtfaehiger Koepfe - ob dieselben Personen ueberhaupt
+   * fuer die betroffenen Arbeitsgaenge qualifiziert sind, blieb
+   * unberuecksichtigt. Konstruierter Beweisfall: zwei schichtfaehige
+   * Personen, zwei Arbeitsgaenge mit je einem zusaetzlichen Kopf Bedarf
+   * (macht zusammen genau 2 - die alte Pruefung haette das durchgehen
+   * lassen) - aber BEIDE Personen sind nur fuer AV qualifiziert, fuer
+   * BIEGEN qualifiziert niemand. Real ist das nicht machbar.
+   */
+  const config = testConfig({
+    workforce: {
+      baseHeadcount: 2,
+      team: {
+        source: 'MANNSCHAFT', enforceSkills: true,
+        people: [
+          { id: 'A', label: 'A', role: '', kind: 'STAMM', factor: 1, rate: null, shiftCapable: true,
+            skills: { AV: true, BIEGEN: false }, absences: [], weeks: {}, pinnedOps: {},
+            startDate: null, endDate: null, defaultActive: true, active: true, note: '' },
+          { id: 'B', label: 'B', role: '', kind: 'STAMM', factor: 1, rate: null, shiftCapable: true,
+            skills: { AV: true, BIEGEN: false }, absences: [], weeks: {}, pinnedOps: {},
+            startDate: null, endDate: null, defaultActive: true, active: true, note: '' },
+        ],
+      },
+    },
+  });
+  assert.equal(schichtstandMachbar({ AV: 2, BIEGEN: 2 }, config), false,
+    'niemand ist für Biegen qualifiziert - trotz genug Köpfen insgesamt nicht machbar');
+  assert.equal(schichtstandMachbar({ AV: 2, BIEGEN: 1 }, config), true,
+    'ohne Biegen-Bedarf reicht eine der beiden Personen für AV aus');
+
+  // Gegenprobe: qualifiziert eine Person auch für Biegen, wird derselbe Stand machbar.
+  const config2 = JSON.parse(JSON.stringify(config));
+  config2.workforce.team.people.find((p) => p.id === 'B').skills.BIEGEN = true;
+  assert.equal(schichtstandMachbar({ AV: 2, BIEGEN: 2 }, config2), true,
+    'sobald B auch Biegen darf, deckt A AV und B Biegen ab');
 });
 
 test('Der Patch enthält nur die geänderten Arbeitsgänge', () => {
