@@ -1240,7 +1240,21 @@ function zelle(tag, personId) {
      */
     const leer = (tag.idle ?? []).find((x) => x.id === personId);
     const g = leer ? LEER_GRUND[leer.grund] : null;
-    if (g) return h('span.pill.pill--amber', { title: g.lang }, g.text);
+    if (g) {
+      /*
+       * Nutzerfrage 28.09.2026 ("Arbeit des Tages ist vergeben ... das
+       * kann nicht sein"): der Tooltip zeigte bisher nur den ALLGEMEINEN
+       * Text - die genaue Ursache (warteUrsache, siehe engine/assignment.js)
+       * stand bis hierher nur in der WOCHEN-Zusammenfassung unten, nicht an
+       * der einzelnen Zelle selbst. Wer nachpruefen will, warum GENAU DIESE
+       * Person an GENAU DIESEM Tag so dasteht, musste bisher fragen statt
+       * nachzusehen.
+       */
+      const ursache = leer.warteUrsache
+        ? ` Tatsächliche Ursache hier: ${leer.warteUrsache.ursache} (${fmt.num(leer.warteUrsache.stunden, 1)} h warten).`
+        : '';
+      return h('span.pill.pill--amber', { title: g.lang + ursache }, g.text);
+    }
     return h('span.faint', '–');
   }
   return h('div', eintraege.map((e) => h('div.small',
