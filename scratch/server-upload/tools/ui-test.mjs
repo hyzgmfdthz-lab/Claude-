@@ -1001,12 +1001,26 @@ check('Die Anwendung sagt ausdrücklich, dass Personal hier nicht hilft',
  * ================================================================== */
 
 await nav('Übersicht');
+/*
+ * Sechs feste Kacheln - plus eine siebte, NUR wenn WIP-Grenzen wegen
+ * Leerlaufs automatisch gelockert wurden (steuerstand.js, Fix 21.09.2026:
+ * "Aufträge gleichzeitig"/"Mitarbeiter je Auftrag" werden bei Leerlauf
+ * gelockert - diese Kachel ist der dafuer geforderte sichtbare Hinweis).
+ * Bis zu dieser Stelle im Testlauf wurden durch die vorigen Schritte
+ * inzwischen genug Stellschrauben veraendert, dass das auch tatsaechlich
+ * vorkommt - die feste Erwartung von genau sechs Kacheln war deshalb zu eng.
+ */
 const kachelTexte = (await page.locator('.tile').allInnerTexts()).map((t) => t.replace(/\n/g, ' · '));
-check('Sechs Kacheln in fester Anordnung', await page.locator('.tile').count() === 6,
-  `${await page.locator('.tile').count()} Kacheln`);
-check('Die Kacheln beantworten die sechs festgelegten Fragen',
-  ['TERMINTREUE', 'ZU SPÄT', 'ÜBER KAPAZITÄT', 'GRÖSSTER ENGPASS', 'FREIE KAPAZITÄT', 'AUFFÄLLIGKEITEN']
-    .every((x, i) => kachelTexte[i]?.toUpperCase().startsWith(x)),
+const kachelAnzahl = await page.locator('.tile').count();
+check('Sechs oder sieben Kacheln in fester Anordnung (siebte nur bei gelockerter WIP-Grenze)',
+  kachelAnzahl === 6 || kachelAnzahl === 7,
+  `${kachelAnzahl} Kacheln`);
+const pflichtKacheln = ['TERMINTREUE', 'ZU SPÄT', 'ÜBER KAPAZITÄT', 'GRÖSSTER ENGPASS', 'FREIE KAPAZITÄT'];
+const nachPflichtKacheln = kachelTexte.slice(pflichtKacheln.length).map((t) => t.split(' · ')[0]);
+check('Die Kacheln beantworten die festgelegten Fragen',
+  pflichtKacheln.every((x, i) => kachelTexte[i]?.toUpperCase().startsWith(x))
+    && nachPflichtKacheln.at(-1)?.toUpperCase().startsWith('AUFFÄLLIGKEITEN')
+    && (nachPflichtKacheln.length === 1 || nachPflichtKacheln[0]?.toUpperCase().startsWith('WIP-GRENZE')),
   kachelTexte.map((t) => t.split(' · ')[0]).join(' | '));
 check('Jede Kachel erklärt ihre Zahl in einem Satz',
   kachelTexte.every((t) => t.split(' · ').length >= 3),
@@ -1565,17 +1579,27 @@ check('Die fünf zugesagten Leiharbeiter sind mit Eintritt geführt',
 check('Stammmitarbeiter sind dauerhaft geführt',
   (await page.locator('.card:has-text("Wer darf was?") tbody tr:has-text("JARO")').innerText()).includes('dauerhaft'));
 
-// Haken entfernen muss sofort auf die Rechnung wirken
+/*
+ * Skill-Level auf 0 stellen muss sofort auf die Rechnung wirken. Frueher
+ * ein Haken (input[type="checkbox"]), seit 23.09.2026 ein Skill-Level
+ * 0-3 (select.skill-select, siehe web/js/views/mannschaft.js) - der
+ * alte Test suchte noch nach checkboxen und fand pro Zeile nur noch die
+ * eine fuer "Schicht", nicht die erwartete vierte.
+ */
 if (await page.locator('.overlay').count() > 0) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(500);
 }
 const reihe = page.locator('.card:has-text("Wer darf was?") tbody tr').first();
-const hakenVorher = await reihe.locator('input[type="checkbox"]').count();
-await reihe.locator('input[type="checkbox"]').nth(3).uncheck();
+const skillSpaltenVorher = await reihe.locator('select.skill-select').count();
+const skillAuswahl = reihe.locator('select.skill-select').first();
+const stufeVorher = await skillAuswahl.inputValue();
+await skillAuswahl.selectOption('0');
 await page.waitForTimeout(3000);
-check('Qualifikation abwählbar', hakenVorher >= 11 && !await reihe.locator('input[type="checkbox"]').nth(3).isChecked());
-await reihe.locator('input[type="checkbox"]').nth(3).check();
+check('Qualifikation abwählbar (Skill-Level auf 0 stellbar)',
+  skillSpaltenVorher >= 11 && (await skillAuswahl.inputValue()) === '0',
+  `${skillSpaltenVorher} Arbeitsgang-Spalten, Level jetzt ${await skillAuswahl.inputValue()}`);
+await skillAuswahl.selectOption(stufeVorher);
 await page.waitForTimeout(3000);
 
 /* ---------- Anwesenheit je Kalenderwoche ---------- */
