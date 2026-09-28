@@ -520,24 +520,21 @@ if (autoAenderungen) {
   check('Vor dem Übernehmen des Schichtplans wird der laufende Plan geschützt',
     /Der laufende Plan bleibt unverändert/.test(await page.locator('.modal').innerText()));
   /*
-   * applySchichten rechnet intern denselben ~60 s dauernden Vorschlag neu
-   * (server/api.js): in der Einzeldatei-Fassung blockiert das den Tab,
-   * daher der grosszuegige Klick-Timeout. Serverseitig blockiert es den Tab
-   * nicht, aber die anschlieszende feste Wartezeit von nur 8 s war bei
-   * weitem zu kurz - die Pruefung lief dann gegen einen Stand, dessen
-   * Uebernehmen-Anfrage noch unterwegs war, und brachte alle nachfolgenden
-   * Schritte durcheinander (u. a. blieb spaeter das Stand-speichern-Fenster
-   * offen und blockierte den Zurücksetzen-Knopf). Jetzt wird auf die
-   * tatsaechliche Anzahl Szenarien gewartet statt auf eine geschaetzte Zeit.
+   * applySchichten rechnet intern denselben Vorschlag neu (server/api.js) -
+   * gemessen (28.09.2026, mehrere Laeufe) zwischen 48 s und 64 s, je nach
+   * Systemlast auch daueber. In der Einzeldatei-Fassung blockiert das den
+   * Tab, daher der grosszuegige Klick-Timeout. Serverseitig blockiert es
+   * den Tab nicht, aber eine feste Wartezeit (erst 8 s, dann ein Wartezaehler
+   * mit nur 90 s) war wiederholt zu kurz - die Pruefung lief dann gegen
+   * einen Stand, dessen Uebernehmen-Anfrage noch unterwegs war, und brachte
+   * alle nachfolgenden Schritte durcheinander (u. a. blieb spaeter das
+   * Stand-speichern-Fenster offen und blockierte den Zurücksetzen-Knopf).
+   * Jetzt wird auf das echte Erfolgssignal der Anwendung gewartet (derselbe
+   * Erfolgs-Toast, den auch uebernehmeSchichten() in steuerstand.js zeigt),
+   * mit derselben grosszuegigen Frist wie beim Auto-Vorschlag oben.
    */
   await page.locator('.modal button:has-text("Übernehmen")').click({ timeout: 120000 });
-  await page.waitForFunction(
-    (erwartet) => [...document.querySelectorAll('.topctl')]
-      .find((el) => [...el.querySelectorAll('label')].some((l) => l.textContent.trim() === 'Stand'))
-      ?.querySelector('select')?.options.length >= erwartet,
-    szenarienVorSchicht + 1,
-    { timeout: 90000 },
-  ).catch(() => {});
+  await page.waitForSelector('.toast--ok', { timeout: 180000 }).catch(() => {});
   check('Der Schichtplan wird in ein eigenes Szenario übernommen',
     await standWahlSchicht.locator('option').count() === szenarienVorSchicht + 1,
     `${szenarienVorSchicht} -> ${await standWahlSchicht.locator('option').count()}`);
