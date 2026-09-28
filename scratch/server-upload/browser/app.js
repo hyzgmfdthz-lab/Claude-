@@ -150,6 +150,8 @@ export const api = {
   scenarioConfig: call((scenario) => core.scenarioConfig(scenario)),
   validate: call((scenario) => core.validate(scenario)),
   requiredStaff: call((scenario) => core.requiredStaff(scenario)),
+  schichtvorschlag: call((scenario) => core.schichtvorschlag(scenario)),
+  applySchichten: call((scenario, payload) => core.applySchichten(scenario, payload)),
   revision: call(() => core.revision()),
 
   createProject: call((p) => core.createProject(p)),
