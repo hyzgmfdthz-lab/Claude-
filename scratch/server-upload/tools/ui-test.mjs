@@ -519,10 +519,25 @@ if (autoAenderungen) {
   await page.waitForSelector('.modal:has-text("Schichtplan in ein Szenario übernehmen?")');
   check('Vor dem Übernehmen des Schichtplans wird der laufende Plan geschützt',
     /Der laufende Plan bleibt unverändert/.test(await page.locator('.modal').innerText()));
-  /* applySchichten rechnet intern denselben Vorschlag neu (server/api.js) - in der
-   * Einzeldatei-Fassung blockiert das wie oben den Tab, siehe Kommentar bei .click({ timeout: 120000 }) oben. */
+  /*
+   * applySchichten rechnet intern denselben ~60 s dauernden Vorschlag neu
+   * (server/api.js): in der Einzeldatei-Fassung blockiert das den Tab,
+   * daher der grosszuegige Klick-Timeout. Serverseitig blockiert es den Tab
+   * nicht, aber die anschlieszende feste Wartezeit von nur 8 s war bei
+   * weitem zu kurz - die Pruefung lief dann gegen einen Stand, dessen
+   * Uebernehmen-Anfrage noch unterwegs war, und brachte alle nachfolgenden
+   * Schritte durcheinander (u. a. blieb spaeter das Stand-speichern-Fenster
+   * offen und blockierte den Zurücksetzen-Knopf). Jetzt wird auf die
+   * tatsaechliche Anzahl Szenarien gewartet statt auf eine geschaetzte Zeit.
+   */
   await page.locator('.modal button:has-text("Übernehmen")').click({ timeout: 120000 });
-  await page.waitForTimeout(8000);
+  await page.waitForFunction(
+    (erwartet) => [...document.querySelectorAll('.topctl')]
+      .find((el) => [...el.querySelectorAll('label')].some((l) => l.textContent.trim() === 'Stand'))
+      ?.querySelector('select')?.options.length >= erwartet,
+    szenarienVorSchicht + 1,
+    { timeout: 90000 },
+  ).catch(() => {});
   check('Der Schichtplan wird in ein eigenes Szenario übernommen',
     await standWahlSchicht.locator('option').count() === szenarienVorSchicht + 1,
     `${szenarienVorSchicht} -> ${await standWahlSchicht.locator('option').count()}`);
