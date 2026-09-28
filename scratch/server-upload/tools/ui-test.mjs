@@ -519,7 +519,9 @@ if (autoAenderungen) {
   await page.waitForSelector('.modal:has-text("Schichtplan in ein Szenario übernehmen?")');
   check('Vor dem Übernehmen des Schichtplans wird der laufende Plan geschützt',
     /Der laufende Plan bleibt unverändert/.test(await page.locator('.modal').innerText()));
-  await page.locator('.modal button:has-text("Übernehmen")').click();
+  /* applySchichten rechnet intern denselben Vorschlag neu (server/api.js) - in der
+   * Einzeldatei-Fassung blockiert das wie oben den Tab, siehe Kommentar bei .click({ timeout: 120000 }) oben. */
+  await page.locator('.modal button:has-text("Übernehmen")').click({ timeout: 120000 });
   await page.waitForTimeout(8000);
   check('Der Schichtplan wird in ein eigenes Szenario übernommen',
     await standWahlSchicht.locator('option').count() === szenarienVorSchicht + 1,
