@@ -482,7 +482,16 @@ check('Die Anwendung kann die Schichten selbst planen',
   await autoKarte.count() === 1);
 check('Der Wochenwechsel der Schichten steht in der Erklärung',
   /wochenweise/.test(await autoKarte.innerText()));
-await autoKarte.locator('button:has-text("Schichten automatisch planen")').click();
+/*
+ * Der Klick loest eine synchrone Rechnung aus (vorschlagKonvergent), die
+ * auf dem Standard-Datensatz rund 60 s dauert (gemessen 28.09.2026 - schon
+ * vor dieser Sitzung rund 48 s, siehe server/api.js#schichtvorschlag) und
+ * dabei den Tab blockiert. Playwrights click() wartet dabei standardmaessig
+ * nur 30 s auf die Reaktion der Seite - das reicht nicht, ist aber kein
+ * Zeichen fuer einen haengenden Klick, sondern fuer eine lange, blockierende
+ * Rechnung. Deshalb hier ein groszuegiger eigener Timeout.
+ */
+await autoKarte.locator('button:has-text("Schichten automatisch planen")').click({ timeout: 120000 });
 await autoKarte.locator('.answer').waitFor({ timeout: 180000 });
 const autoText = await autoKarte.innerText();
 check('Der Schichtplan nennt die Wirkung auf die Termine',
@@ -593,6 +602,16 @@ await page.locator('.modal button:has-text("Stand speichern")').click();
 await page.waitForTimeout(3000);
 check('Stand aus dem Steuerstand speicherbar',
   await page.locator('.overlay').count() === 0 && await page.locator('.toast--ok').count() >= 1);
+
+/*
+ * Der Fehler-Toast von oben ("Stand ohne Notiz wird abgelehnt") bleibt laut
+ * web/js/ui.js 7000 ms stehen (Erfolgs-Toasts nur 3800 ms) - deutlich
+ * laenger, als bis hierhin seit seinem Erscheinen vergangen ist. Ohne
+ * Wartezeit ueberlagert er noch den "Zurücksetzen"-Knopf und der Klick
+ * schlaegt fehl ("intercepts pointer events"). Es wird auf den echten
+ * DOM-Zustand gewartet statt auf eine geschaetzte Wartezeit.
+ */
+await page.waitForFunction(() => document.querySelectorAll('#toasts .toast').length === 0, { timeout: 10000 }).catch(() => {});
 
 await page.locator('button:has-text("Zurücksetzen")').click();
 await page.waitForTimeout(500);
