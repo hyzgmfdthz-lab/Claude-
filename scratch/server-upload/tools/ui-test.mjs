@@ -778,104 +778,111 @@ check('Einstellungen bieten kein zweites Feld für Personal an',
 const mitarbeiterVorher = await wochenMitarbeiter();
 
 /*
- * Ein Altbestand wird ueber die Schnittstelle untergeschoben - genau so
- * steht er in gewachsenen Datenbestaenden. Die Anwendung darf ihn weder
- * verrechnen noch stillschweigend verschwinden lassen.
+ * Diese Pruefung schiebt Rohdaten direkt per fetch() an /api/... unter -
+ * das setzt einen echten Server voraus (in der Einzeldatei-Fassung gibt es
+ * keinen, siehe BASE.startsWith('http') an anderer Stelle in dieser Datei).
  */
-const altGesetzt = await page.evaluate(async () => {
-  const kopf = {
-    'Content-Type': 'application/json',
-    'X-MEGC-Token': localStorage.getItem('megc-armaturenbau:sitzung') ?? '',
-  };
-  const state = await (await fetch('/api/state', { headers: kopf })).json();
-  const res = await fetch(`/api/scenarios/${encodeURIComponent(state.activeScenarioId)}`, {
-    method: 'PUT',
-    headers: kopf,
-    body: JSON.stringify({
-      config: {
-        workforce: {
-          tempWorkers: [{
-            id: 'ALT-1', label: 'Altbestand Excel', count: 4, from: '2026-09-21', to: null, skills: null,
-          }],
+if (BASE.startsWith('http')) {
+  /*
+   * Ein Altbestand wird ueber die Schnittstelle untergeschoben - genau so
+   * steht er in gewachsenen Datenbestaenden. Die Anwendung darf ihn weder
+   * verrechnen noch stillschweigend verschwinden lassen.
+   */
+  const altGesetzt = await page.evaluate(async () => {
+    const kopf = {
+      'Content-Type': 'application/json',
+      'X-MEGC-Token': localStorage.getItem('megc-armaturenbau:sitzung') ?? '',
+    };
+    const state = await (await fetch('/api/state', { headers: kopf })).json();
+    const res = await fetch(`/api/scenarios/${encodeURIComponent(state.activeScenarioId)}`, {
+      method: 'PUT',
+      headers: kopf,
+      body: JSON.stringify({
+        config: {
+          workforce: {
+            tempWorkers: [{
+              id: 'ALT-1', label: 'Altbestand Excel', count: 4, from: '2026-09-21', to: null, skills: null,
+            }],
+          },
         },
-      },
-    }),
+      }),
+    });
+    return res.ok;
   });
-  return res.ok;
-});
-check('Ein alter Zahlenbestand lässt sich für die Prüfung unterschieben', altGesetzt);
+  check('Ein alter Zahlenbestand lässt sich für die Prüfung unterschieben', altGesetzt);
 
-await page.reload();
-await page.waitForTimeout(3500);
-check('Der Altbestand verändert die gerechnete Besetzung nicht',
-  await wochenMitarbeiter() === mitarbeiterVorher,
-  `${mitarbeiterVorher} -> ${await wochenMitarbeiter()} MA`);
-check('Die Wochenübersicht weist keinen stillen Zuschlag mehr aus',
-  !(await page.locator('.card:has(.card__title:text-is("Wochenübersicht")) tbody').innerText()).includes('davon'));
+  await page.reload();
+  await page.waitForTimeout(3500);
+  check('Der Altbestand verändert die gerechnete Besetzung nicht',
+    await wochenMitarbeiter() === mitarbeiterVorher,
+    `${mitarbeiterVorher} -> ${await wochenMitarbeiter()} MA`);
+  check('Die Wochenübersicht weist keinen stillen Zuschlag mehr aus',
+    !(await page.locator('.card:has(.card__title:text-is("Wochenübersicht")) tbody').innerText()).includes('davon'));
 
-await nav('Einstellungen');
-await page.waitForTimeout(1500);
-const altKarte = page.locator('.card:has-text("Alte Zahlenlisten – ohne Wirkung")');
-const altText = await altKarte.count() > 0 ? await altKarte.innerText() : '';
-check('Alte Zahlenlisten werden als wirkungslos ausgewiesen',
-  /4 Personen stehen hier noch als reine Anzahl/.test(altText)
-  && /NICHT in die Rechnung ein/.test(altText),
-  altText.split('\n').find((z) => /reine Anzahl/.test(z))?.slice(0, 120) ?? 'keine Meldung');
-check('Der Altbestand wird benannt, nicht nur gezählt',
-  /Altbestand Excel: \+4 ab 21\.09\.2026/.test(altText),
-  altText.split('\n').find((z) => /Altbestand Excel/.test(z))?.slice(0, 100) ?? 'ohne Bezeichnung');
+  await nav('Einstellungen');
+  await page.waitForTimeout(1500);
+  const altKarte = page.locator('.card:has-text("Alte Zahlenlisten – ohne Wirkung")');
+  const altText = await altKarte.count() > 0 ? await altKarte.innerText() : '';
+  check('Alte Zahlenlisten werden als wirkungslos ausgewiesen',
+    /4 Personen stehen hier noch als reine Anzahl/.test(altText)
+    && /NICHT in die Rechnung ein/.test(altText),
+    altText.split('\n').find((z) => /reine Anzahl/.test(z))?.slice(0, 120) ?? 'keine Meldung');
+  check('Der Altbestand wird benannt, nicht nur gezählt',
+    /Altbestand Excel: \+4 ab 21\.09\.2026/.test(altText),
+    altText.split('\n').find((z) => /Altbestand Excel/.test(z))?.slice(0, 100) ?? 'ohne Bezeichnung');
 
-await nav('Daten & Prüfung');
-await page.waitForTimeout(1500);
-check('Die Prüfung nennt die wirkungslosen Zahlenlisten',
-  /Alte Zahlenlisten sind noch hinterlegt/.test(await page.locator('.view').innerText()),
-  (await page.locator('.view').innerText()).split('\n').find((z) => /Zahlenlisten/.test(z))?.slice(0, 110) ?? 'nicht gemeldet');
+  await nav('Daten & Prüfung');
+  await page.waitForTimeout(1500);
+  check('Die Prüfung nennt die wirkungslosen Zahlenlisten',
+    /Alte Zahlenlisten sind noch hinterlegt/.test(await page.locator('.view').innerText()),
+    (await page.locator('.view').innerText()).split('\n').find((z) => /Zahlenlisten/.test(z))?.slice(0, 110) ?? 'nicht gemeldet');
 
-/* Der Weg heraus: in die Mannschaft uebernehmen - dort zaehlen sie */
-await nav('Einstellungen');
-await page.waitForTimeout(1500);
-// Wer schon einen Eintritt hat, bleibt - der Rest wird nachher zurueckgesetzt
-const vorUebernahme = await page.evaluate(async () => {
-  const kopf = { 'X-MEGC-Token': localStorage.getItem('megc-armaturenbau:sitzung') ?? '' };
-  const state = await (await fetch('/api/state', { headers: kopf })).json();
-  const t = await (await fetch(`/api/team?scenario=${encodeURIComponent(state.activeScenarioId)}`, { headers: kopf })).json();
-  return (t.people ?? []).filter((x) => x.startDate).map((x) => x.id);
-});
-await page.locator('.card:has-text("Alte Zahlenlisten – ohne Wirkung") button:has-text("In die Mannschaft übernehmen")').click();
-await page.locator('.modal:has-text("In die Mannschaft übernehmen")').waitFor({ state: 'visible' });
-await page.locator('.modal__foot button:has-text("Übernehmen")').click();
-await page.waitForTimeout(5000);
-check('Die alten Zahlenlisten lassen sich in die Mannschaft übernehmen',
-  await page.locator('.card:has-text("Alte Zahlenlisten – ohne Wirkung")').count() === 0
-  && (await page.locator('.card:has(.card__title:text-is("Personal"))').innerText())
-    .includes('Personal wird ausschließlich im Reiter Mannschaft gepflegt'));
-const mitarbeiterNachher = await wochenMitarbeiter();
-check('Nach der Übernahme zählen die Leute wirklich mit',
-  mitarbeiterNachher > mitarbeiterVorher,
-  `${mitarbeiterVorher} -> ${mitarbeiterNachher} MA`);
-
-/* Ausgangsstand wiederherstellen - die folgenden Pruefungen rechnen damit */
-await page.evaluate(async (behalten) => {
-  const kopf = {
-    'Content-Type': 'application/json',
-    'X-MEGC-Token': localStorage.getItem('megc-armaturenbau:sitzung') ?? '',
-  };
-  const state = await (await fetch('/api/state', { headers: kopf })).json();
-  const id = encodeURIComponent(state.activeScenarioId);
-  const t = await (await fetch(`/api/team?scenario=${id}`, { headers: kopf })).json();
-  const people = (t.people ?? []).map((p) => (
-    p.startDate && !behalten.includes(p.id)
-      ? { ...p, startDate: null, defaultActive: false }
-      : p));
-  await fetch(`/api/scenarios/${id}`, {
-    method: 'PUT', headers: kopf, body: JSON.stringify({ config: { workforce: { team: { people } } } }),
+  /* Der Weg heraus: in die Mannschaft uebernehmen - dort zaehlen sie */
+  await nav('Einstellungen');
+  await page.waitForTimeout(1500);
+  // Wer schon einen Eintritt hat, bleibt - der Rest wird nachher zurueckgesetzt
+  const vorUebernahme = await page.evaluate(async () => {
+    const kopf = { 'X-MEGC-Token': localStorage.getItem('megc-armaturenbau:sitzung') ?? '' };
+    const state = await (await fetch('/api/state', { headers: kopf })).json();
+    const t = await (await fetch(`/api/team?scenario=${encodeURIComponent(state.activeScenarioId)}`, { headers: kopf })).json();
+    return (t.people ?? []).filter((x) => x.startDate).map((x) => x.id);
   });
-}, vorUebernahme);
-await page.reload();
-await page.waitForTimeout(3500);
-check('Der Ausgangsstand der Mannschaft ist wiederhergestellt',
-  await wochenMitarbeiter() === mitarbeiterVorher,
-  `${await wochenMitarbeiter()} gegen ${mitarbeiterVorher} MA`);
+  await page.locator('.card:has-text("Alte Zahlenlisten – ohne Wirkung") button:has-text("In die Mannschaft übernehmen")').click();
+  await page.locator('.modal:has-text("In die Mannschaft übernehmen")').waitFor({ state: 'visible' });
+  await page.locator('.modal__foot button:has-text("Übernehmen")').click();
+  await page.waitForTimeout(5000);
+  check('Die alten Zahlenlisten lassen sich in die Mannschaft übernehmen',
+    await page.locator('.card:has-text("Alte Zahlenlisten – ohne Wirkung")').count() === 0
+    && (await page.locator('.card:has(.card__title:text-is("Personal"))').innerText())
+      .includes('Personal wird ausschließlich im Reiter Mannschaft gepflegt'));
+  const mitarbeiterNachher = await wochenMitarbeiter();
+  check('Nach der Übernahme zählen die Leute wirklich mit',
+    mitarbeiterNachher > mitarbeiterVorher,
+    `${mitarbeiterVorher} -> ${mitarbeiterNachher} MA`);
+
+  /* Ausgangsstand wiederherstellen - die folgenden Pruefungen rechnen damit */
+  await page.evaluate(async (behalten) => {
+    const kopf = {
+      'Content-Type': 'application/json',
+      'X-MEGC-Token': localStorage.getItem('megc-armaturenbau:sitzung') ?? '',
+    };
+    const state = await (await fetch('/api/state', { headers: kopf })).json();
+    const id = encodeURIComponent(state.activeScenarioId);
+    const t = await (await fetch(`/api/team?scenario=${id}`, { headers: kopf })).json();
+    const people = (t.people ?? []).map((p) => (
+      p.startDate && !behalten.includes(p.id)
+        ? { ...p, startDate: null, defaultActive: false }
+        : p));
+    await fetch(`/api/scenarios/${id}`, {
+      method: 'PUT', headers: kopf, body: JSON.stringify({ config: { workforce: { team: { people } } } }),
+    });
+  }, vorUebernahme);
+  await page.reload();
+  await page.waitForTimeout(3500);
+  check('Der Ausgangsstand der Mannschaft ist wiederhergestellt',
+    await wochenMitarbeiter() === mitarbeiterVorher,
+    `${await wochenMitarbeiter()} gegen ${mitarbeiterVorher} MA`);
+}
 
 await nav('Einstellungen');
 for (const t of ['Erweitert', 'Szenarien', 'Benutzer', 'Häufig gebraucht']) {
