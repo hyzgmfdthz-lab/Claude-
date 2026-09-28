@@ -316,22 +316,34 @@ const stunden = page.locator('.card:has(.card__title:text-is("Stunden je Arbeits
 await stunden.waitFor({ state: 'visible', timeout: 20000 });
 const stText = await stunden.innerText();
 check('Die Stunden sind auf die Arbeitsgänge gebucht',
-  /Orbitalschweißen/.test(stText) && /Arbeitsinhalt h/.test(stText)
+  /Sägen/.test(stText) && /Arbeitsinhalt h/.test(stText)
   && /h je Auftrag/.test(stText) && /blieb liegen h/.test(stText));
 check('Die Buchung geht auf – die Summe stimmt mit der offenen Arbeit überein',
   /Stimmt mit der offenen Arbeit aller Aufträge überein/.test(stText),
   stText.split('\n').find((z) => /offene Arbeit aller Aufträge/.test(z))?.slice(0, 120) ?? 'keine Gegenprobe');
 check('„blieb liegen" wird ausdrücklich nicht als zweite Arbeitsmenge ausgegeben',
   /keine zweite Arbeitsmenge/.test(stText) && /genau einmal/.test(stText));
-// Gegenprobe an der Zeile Orbitalschweissen: liegengeblieben <= offen
+/*
+ * Gegenprobe: liegengeblieben <= offen, geprueft an der Zeile mit der
+ * meisten offenen Arbeit. Bewusst NICHT an einem festen Arbeitsgangnamen
+ * (frueher "Orbitalschweissen") - der Arbeitsgang mit der groessten
+ * Warteschlange wechselt, und ein hartkodierter Name faellt bei jeder
+ * Umbenennung/Aufteilung der Arbeitsgaenge (z. B. 23.09.2026: Orbital in
+ * Kehlnaht/Stumpfnaht) still auseinander.
+ */
 {
-  const zelle = async (n) => (await stunden.locator(`tbody tr:has-text("Orbitalschweißen") td:nth-child(${n})`)
-    .innerText()).replace(/\./g, '').replace(',', '.').trim();
-  const offen = Number(await zelle(4));
-  const liegen = Number((await zelle(8)).replace('–', '0')) || 0;
+  const num = (t) => Number(t.replace(/\./g, '').replace(',', '.').replace('–', '0').trim()) || 0;
+  const zeilen = await stunden.locator('tbody tr').all();
+  let beste = null;
+  for (const zeile of zeilen) {
+    const name = (await zeile.locator('td').first().innerText()).trim();
+    const offen = num(await zeile.locator('td:nth-child(4)').innerText());
+    const liegen = num(await zeile.locator('td:nth-child(8)').innerText());
+    if (offen > 0 && (!beste || offen > beste.offen)) beste = { name, offen, liegen };
+  }
   check('Liegengebliebene Stunden bleiben unter der offenen Arbeit',
-    offen > 0 && liegen <= offen,
-    `Orbitalschweißen: ${liegen} h lagen von ${offen} h offener Arbeit`);
+    beste != null && beste.liegen <= beste.offen,
+    beste ? `${beste.name}: ${beste.liegen} h lagen von ${beste.offen} h offener Arbeit` : 'keine Zeile mit offener Arbeit gefunden');
 }
 
 check('Der zweite Reiter nennt den Engpass in einem Satz',
@@ -518,9 +530,14 @@ if (autoAenderungen) {
 }
 
 const schichtKarte = page.locator('.card:has-text("Schichten und Plätze je Arbeitsgang")');
+/*
+ * 14 Arbeitsgaenge (Stand 28.09.2026, engine/model.js OPERATIONS): seit
+ * dem Aufteilen von Orbitalschweissen in Kehlnaht/Stumpfnaht und dem
+ * Hinzufuegen von Handschweissen/Molchen (23.09.2026) nicht mehr 11.
+ */
 check('Belegungszeit je Arbeitsgang vorhanden',
   await schichtKarte.count() === 1
-  && await schichtKarte.locator('tbody tr').count() === 11,
+  && await schichtKarte.locator('tbody tr').count() === 14,
   `${await schichtKarte.locator('tbody tr').count()} Arbeitsgänge`);
 // Spalte 3 ist "begrenzt die Planung" - die Schichtspalte hat eigene Pillen
 const grenzSpalte = () => schichtKarte.locator('tbody td:nth-child(3)');
@@ -530,11 +547,11 @@ check('Es ist erkennbar, welcher Arbeitsgang die Planung begrenzt',
 check('Die Arbeitsvorbereitung ist als eigener Arbeitsgang geführt',
   await schichtKarte.locator('tbody tr:has-text("Arbeitsvorbereitung")').count() === 1);
 
-const orbitalZeile = () => page.locator('.card:has-text("Schichten und Plätze je Arbeitsgang") tbody tr:has-text("Orbitalschweißen")');
+const orbitalZeile = () => page.locator('.card:has-text("Schichten und Plätze je Arbeitsgang") tbody tr:has-text("Stumpfnaht Orbital")');
 const auslastungVorher = Number.parseFloat((await orbitalZeile().locator('td').last().innerText()).replace(/[^\d,]/g, '').replace(',', '.'));
-await schichtKarte.locator('tbody tr:has-text("Orbitalschweißen") select').selectOption('22.5');
+await schichtKarte.locator('tbody tr:has-text("Stumpfnaht Orbital") select').selectOption('22.5');
 await page.waitForTimeout(3500);
-check('Schichten je Arbeitsgang umstellbar (3 Schichten am Orbitalschweißen)',
+check('Schichten je Arbeitsgang umstellbar (3 Schichten an Stumpfnaht Orbital)',
   (await orbitalZeile().locator('input[type="number"]').nth(1).inputValue()) === '22.5'
   && (await orbitalZeile().innerText()).includes('3 Schichten'),
   (await orbitalZeile().innerText()).replace(/\n/g, ' · ').slice(0, 90));
@@ -838,11 +855,11 @@ for (const t of ['Erweitert', 'Szenarien', 'Benutzer', 'Häufig gebraucht']) {
 await nav('Steuerstand');
 const diagrammWahl = page.locator('.card:has-text("Kapazität je Kalenderwoche") select').first();
 check('Diagramm ist auf einen Arbeitsgang umschaltbar', await diagrammWahl.count() === 1);
-await diagrammWahl.selectOption('ORBITAL');
+await diagrammWahl.selectOption('ORBITAL_STUMPFNAHT');
 await page.waitForTimeout(1200);
-const orbitalKarte = await page.locator('.card:has-text("Orbitalschweißen: Bedarf gegen Kapazität")').count();
+const orbitalKarte = await page.locator('.card:has-text("Stumpfnaht Orbital: Bedarf gegen Kapazität")').count();
 check('Diagramm zeigt den einzelnen Arbeitsgang', orbitalKarte === 1);
-const orbitalText = await page.locator('.card:has-text("Orbitalschweißen: Bedarf gegen Kapazität")').innerText();
+const orbitalText = await page.locator('.card:has-text("Stumpfnaht Orbital: Bedarf gegen Kapazität")').innerText();
 check('Beim Arbeitsgang stehen Plätze, mögliche Tage und Rückstand',
   /Maschinen/.test(orbitalText) && /mögliche Tage je Woche/.test(orbitalText),
   orbitalText.split('\n').find((z) => z.includes('Tage je Woche'))?.slice(0, 110) ?? '');
@@ -995,8 +1012,8 @@ await nav('Belegung');
 await page.waitForSelector('.board__grid tbody tr', { timeout: 40000 });
 const gitter = page.locator('.board__grid');
 check('Belegungsgitter zeigt je Arbeitsplatz eine Zeile',
-  await gitter.locator('tbody tr').count() === 12,
-  `${await gitter.locator('tbody tr').count()} Zeilen (11 Arbeitsgänge und die Summe)`);
+  await gitter.locator('tbody tr').count() === 15,
+  `${await gitter.locator('tbody tr').count()} Zeilen (14 Arbeitsgänge und die Summe)`);
 check('Vier Wochen als Tagesspalten',
   await gitter.locator('thead tr.board__days th').count() === 28,
   `${await gitter.locator('thead tr.board__days th').count()} Spalten`);
@@ -1844,20 +1861,20 @@ check('Rückkehr in den Arbeitsstand', await page.locator('.note--warn:has-text(
 await nav('Arbeitsfolgen');
 await page.locator('button:has-text("Neubau 40 ft")').click();
 await page.waitForTimeout(600);
-const stundenFeld = page.locator('table.tbl tbody tr:has-text("Orbitalschweißen") input[type="number"]').first();
+const stundenFeld = page.locator('table.tbl tbody tr:has-text("Stumpfnaht Orbital") input[type="number"]').first();
 const alt = await stundenFeld.inputValue();
 await stundenFeld.fill(String(Number(alt) + 25));
 await stundenFeld.blur();
 await page.waitForTimeout(2800);
 check('Arbeitsgangzeit änderbar',
-  (await page.locator('table.tbl tbody tr:has-text("Orbitalschweißen") input[type="number"]').first().inputValue()) !== alt);
+  (await page.locator('table.tbl tbody tr:has-text("Stumpfnaht Orbital") input[type="number"]').first().inputValue()) !== alt);
 await nav('Steuerstand');
 check('Änderung wirkt auf die Planung', Number.parseFloat(await kpiValue('Aufwand')) > 0);
 await nav('Arbeitsfolgen');
 await page.locator('button:has-text("Neubau 40 ft")').click();
 await page.waitForTimeout(600);
-await page.locator('table.tbl tbody tr:has-text("Orbitalschweißen") input[type="number"]').first().fill(alt);
-await page.locator('table.tbl tbody tr:has-text("Orbitalschweißen") input[type="number"]').first().blur();
+await page.locator('table.tbl tbody tr:has-text("Stumpfnaht Orbital") input[type="number"]').first().fill(alt);
+await page.locator('table.tbl tbody tr:has-text("Stumpfnaht Orbital") input[type="number"]').first().blur();
 await page.waitForTimeout(2600);
 
 /* ================================================================== *
