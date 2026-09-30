@@ -302,3 +302,55 @@ test('Manuelle Schicht wird ignoriert, wenn die Person nicht schichtfähig ist',
   const wp = wochenSchichten(cfg, ['2026-W40'], personen);
   assert.equal(wp.zuordnung['2026-W40'].C, 1, 'nicht schichtfähig bleibt immer Frühschicht');
 });
+
+/*
+ * FIX (Nutzerfrage 30.09.2026): auf echten Daten landeten zwei liegen-
+ * gebliebene Platzhalter-Kürzel ("LEIH TEST"/"LEIH TEST 2", Zeitanteil
+ * factor:0) fast jede Woche in Schicht 3 - dort, wo laut "Schichten pro
+ * Arbeitsgang" (Orbitalschweißen) real gearbeitet werden sollte. Sie
+ * belegten die knappen Rotationsplätze, ohne selbst je etwas beizutragen
+ * (factor:0 zählt überall sonst im Modell - z. B. teamOn() in team.js -
+ * ausdrücklich mit null Kapazität).
+ */
+test('Personen mit Zeitanteil 0 (Karteileichen/Platzhalter) bekommen keine Schicht und blockieren keinen Rotationsplatz', () => {
+  const cfg = testConfig({ resources: { operatingHoursPerDay: 16 } });
+  const personen = [
+    { id: 'REAL1', shiftCapable: true, factor: 1 },
+    { id: 'REAL2', shiftCapable: true, factor: 1 },
+    { id: 'GEIST1', shiftCapable: true, factor: 0 },
+    { id: 'GEIST2', shiftCapable: true, factor: 0 },
+  ];
+  const wp = wochenSchichten(cfg, ['2026-W40'], personen);
+  assert.equal(wp.maxSchichten, 2, 'Testaufbau muss echten Mehrschichtbetrieb ergeben');
+  assert.equal(wp.zuordnung['2026-W40'].GEIST1, undefined,
+    'Zeitanteil 0 zählt nirgends mit - keine Schicht, kein blockierter Rotationsplatz');
+  assert.equal(wp.zuordnung['2026-W40'].GEIST2, undefined);
+  assert.equal(Object.keys(wp.zuordnung['2026-W40']).length, 2,
+    'nur die beiden echten Personen bekommen überhaupt eine Zuordnung');
+});
+
+/*
+ * FIX (Nutzerfrage 30.09.2026, an echten Daten gefunden): grenzenRest[sn-1]
+ * (das Ziel je Schicht minus schon manuell belegter Plätze) ist so
+ * berechnet, dass es nie unter minZusammen faellt - das setzt aber
+ * voraus, dass am Ende auch wirklich so viele NICHT manuell verplante
+ * Personen uebrig sind. Waren (wie im echten Datenbestand) elf von zwoelf
+ * schichtfaehigen Leuten eine Woche schon manuell auf Schicht 1/2 gesetzt,
+ * blieb nur noch eine einzige freie Person fuer ein Zwei-Personen-Ziel in
+ * Schicht 3 uebrig - und bekam die Schicht bisher trotzdem allein.
+ */
+test('Reicht der freie (nicht manuell verplante) Rest nicht für minZusammen, bleibt die Schicht unbesetzt statt eine Person allein zu schicken', () => {
+  const cfg = testConfig({ resources: { operatingHoursPerDay: 22.5 } });
+  const personen = [
+    { id: 'A', shiftCapable: true, factor: 1, shiftWeeks: { '2026-W40': 1 } },
+    { id: 'B', shiftCapable: true, factor: 1, shiftWeeks: { '2026-W40': 1 } },
+    { id: 'C', shiftCapable: true, factor: 1, shiftWeeks: { '2026-W40': 1 } },
+    // Einzige Person ohne manuelle Zuordnung - fuer sich allein zu wenig
+    // fuer die Zwei-Personen-Regel in Schicht 3.
+    { id: 'FREI', shiftCapable: true, factor: 1 },
+  ];
+  const wp = wochenSchichten(cfg, ['2026-W40'], personen);
+  assert.equal(wp.maxSchichten, 3, 'Testaufbau muss echten Dreischichtbetrieb ergeben');
+  assert.notEqual(wp.zuordnung['2026-W40'].FREI, 3,
+    'FREI darf nicht allein in Schicht 3 landen - lieber Frühschicht als "keiner darf allein arbeiten" verletzen');
+});
