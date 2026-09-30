@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Armaturenbau MEGC – Produktionsplanung</title>
-<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-28">
+<meta name="generator" content="Armaturenbau MEGC 1.0.0, Einzeldatei-Fassung vom 2026-09-30">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%2300727a'/><path d='M22 70V30h11v15h12V30h11v40H45V55H33v15z' fill='white'/></svg>">
 <style>
 /* ==================================================================
@@ -24025,8 +24025,22 @@ function wochenSchichten(config, wochen, personen) {
   let letzteGrenzen = [];
   let letztePlaetzeJeSchicht = [];
 
-  const faehig = personen.filter((p) => p.shiftCapable !== false);
-  const nurFrueh = personen.filter((p) => p.shiftCapable === false);
+  /*
+   * FIX (Nutzerfrage 30.09.2026, "Orbital-Engpass: 'Schichten pro
+   * Arbeitsgang' zeigt 3 Schichten, aber in der Schichteinteilung macht
+   * das keiner"): Personen mit Zeitanteil (factor) 0 - z. B. liegen-
+   * gebliebene Test-/Platzhalter-Kuerzel wie "LEIH TEST" - zaehlten hier
+   * genauso mit wie eine volle Kraft, obwohl sie ueberall sonst im Modell
+   * (teamOn() in team.js, dort summiert `factor` die Kapazitaet)
+   * ausdruecklich NICHTS beitragen. Die Rotation verteilte ihre knappen
+   * Schicht-3-Plaetze deshalb an Karteileichen statt an echte Leute -
+   * die 3. Schicht stand auf dem Papier, aber niemand Reales machte sie.
+   * Mit realen Daten nachgewiesen: in praktisch jeder Woche landeten genau
+   * die beiden Platzhalter "LEIH TEST"/"LEIH TEST 2" (factor:0) in Schicht 3.
+   */
+  const wirksam = personen.filter((p) => (Number(p.factor ?? 1) || 0) > 0.001);
+  const faehig = wirksam.filter((p) => p.shiftCapable !== false);
+  const nurFrueh = wirksam.filter((p) => p.shiftCapable === false);
   /*
    * Niemand arbeitet allein. Vorgabe der Abteilungsleitung: "keiner darf
    * alleine arbeiten immer mindestens zu zweit." Eine Schicht bekommt
@@ -24217,12 +24231,28 @@ function wochenSchichten(config, wochen, personen) {
     for (let sn = maxSchichten; sn >= 2; sn--) {
       const n = grenzenRest[sn - 1] ?? 0;
       if (n <= 0) continue;
+      /*
+       * FIX (Nutzerfrage 30.09.2026, echte Daten): grenzenRest[sn-1] ist so
+       * berechnet, dass Ziel und manuelle Vorbelegung zusammen nie unter
+       * minZusammen fallen (siehe "lieber keine Schicht als eine Person
+       * allein" oben) - das gilt aber nur, WENN am Ende auch wirklich so
+       * viele Personen frei (nicht manuell verplant) uebrig sind. Sind
+       * fast alle schichtfaehigen Leute diese Woche schon manuell auf
+       * andere Schichten gesetzt, kann "verbleibend" kleiner sein als n -
+       * dann bekam bisher die letzte, einzeln uebrige Person trotzdem
+       * diese Schicht (hier beobachtet: "LEIHARBEITER" allein in Schicht 3,
+       * weil elf von zwoelf schichtfaehigen Leuten diese Woche bereits
+       * manuell auf Schicht 1/2 gesetzt waren). Deshalb hier dieselbe
+       * Zweier-Regel noch einmal gegen das tatsaechlich Verfuegbare pruefen.
+       */
+      const genommen = Math.min(n, verbleibend.length);
+      if (genommen < minZusammen) continue; // lieber keine Schicht als eine Person allein
       verbleibend = [...verbleibend].sort((a, b) => {
         const qa = qualifiziertFuerSchicht(a, sn) ? 0 : 1;
         const qb = qualifiziertFuerSchicht(b, sn) ? 0 : 1;
         return qa - qb;
       });
-      for (let k = 0; k < n && verbleibend.length > 0; k++) {
+      for (let k = 0; k < genommen; k++) {
         const p = verbleibend.shift();
         derWoche[p.id] = sn;
       }
