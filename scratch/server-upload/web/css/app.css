@@ -943,6 +943,8 @@ thead .board__rowhead { z-index: 6; }
   .card { border: 0 !important; box-shadow: none !important; }
   table.tbl { font-size: 10px; }
   table.tbl th { background: #eee !important; }
+  table.matrix { font-size: 9px; }
+  table.matrix th, table.matrix td { padding: 2px 4px !important; }
 }
 
 /* ---------------- Datei hierher ziehen ---------------- */

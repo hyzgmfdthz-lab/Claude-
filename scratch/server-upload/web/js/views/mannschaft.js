@@ -31,6 +31,7 @@ export function renderTab(a, tab) {
   if (tab === 'schicht') return h('div.view', schichtplanung(a));
   if (tab === 'urlaub') return h('div.view', urlaubEinlesen(a));
   if (tab === 'aushang') return h('div.view', aushang(a));
+  if (tab === 'schichtdruck') return h('div.view', schichtplanDruck(a));
   return h('div.view', mannschaft(a));
 }
 
@@ -1631,4 +1632,111 @@ function aushangBlatt(a, plan, neu) {
     h('div.small.faint', { style: { padding: '8px 14px' } },
       'Verteilt nach Qualifikation und Anwesenheit. Änderungen bitte über die Anwendung, '
       + 'nicht auf dem Ausdruck – sonst rechnet niemand damit.'));
+}
+
+/* ------------------------------------------------------------------ *
+ * Schichtplan ausdrucken
+ * ------------------------------------------------------------------ */
+
+/** Kurzform der Schichtnamen für die enge Wochen-Matrix. */
+const SCHICHT_KURZ = ['Früh', 'Spät', 'Nacht'];
+
+/**
+ * Schichtplan zum Aushängen/Verteilen: wer hat wann welche Schicht.
+ *
+ * Nutzerauftrag (30.09.2026): "Knopf Schichtplan ausdrucken. Es sollte eine
+ * PDF erstellt werden, in der die Kollegen sehen welche Schichten sie in
+ * welcher Woche haben." Gezeigt wird die TATSAECHLICH GERECHNETE Schicht
+ * (wochenSchichten ueber api.assignment(), Feld schichtplan.jeWoche) - nicht
+ * der reine Uebersteuerungsstatus aus "Schichtplanung je KW" (dort steht nur
+ * "automatisch" oder eine gesetzte Zahl, nie das Ergebnis der Rotation
+ * selbst). Gedruckt wird wie beim Aushang ueber die Druckfunktion des
+ * Browsers (window.print(), @media print) - es geht nichts nach aussen.
+ */
+function schichtplanDruck(a) {
+  const inhalt = h('div', h('div.empty', 'Schichtplan wird geladen …'));
+  ladeSchichtplanDruck(a, inhalt);
+  return card('Schichtplan ausdrucken', inhalt, {
+    flush: true,
+    sub: 'Die tatsächlich verteilte Schicht je Person und Kalenderwoche - nicht nur, ob von Hand '
+      + 'übersteuert wurde. Passt die Tabelle nicht aufs Blatt, im Druckdialog Querformat wählen.',
+    actions: [
+      h('button.btn.btn--sm', { onclick: () => window.print() }, '🖨 Drucken'),
+    ],
+  });
+}
+
+async function ladeSchichtplanDruck(a, container) {
+  try {
+    const [t, plan] = await Promise.all([
+      api.team(a.scenarioId),
+      api.assignment(a.scenarioId, a.ui.range),
+    ]);
+    const jeWoche = plan?.schichtplan?.jeWoche ?? {};
+    if (Object.keys(jeWoche).length === 0) {
+      container.replaceChildren(h('div.empty', 'Kein Schichtplan – es ist keine Mannschaft gepflegt.'));
+      return;
+    }
+    const alle = wochenListe(a).filter((w) => jeWoche[w.key]);
+    a.ui.schichtDruckSeite ??= 0;
+    const zeichne = () => {
+      const seiten = Math.max(1, Math.ceil(alle.length / 13));
+      const seite = Math.min(Math.max(0, a.ui.schichtDruckSeite), seiten - 1);
+      a.ui.schichtDruckSeite = seite;
+      const wochen = alle.slice(seite * 13, seite * 13 + 13);
+      container.replaceChildren(schichtDruckTabelle(a, t, jeWoche, alle, wochen, seite, seiten, zeichne));
+    };
+    zeichne();
+  } catch {
+    container.replaceChildren(h('div.note.note--error', 'Schichtplan konnte nicht geladen werden.'));
+  }
+}
+
+function schichtDruckTabelle(a, t, jeWoche, alle, wochen, seite, seiten, neu) {
+  /*
+   * Dieselbe "ist die Person diese Woche ueberhaupt eingeplant"-Logik wie in
+   * matrixTabelle() oben - `wochenSchichten` selbst kennt nur die grobe
+   * Unterscheidung Stammkraft/Leihe, nicht die wochengenaue Abmeldung.
+   */
+  const aktiv = (p, wk) => {
+    const eigen = p.weeks?.[wk];
+    return typeof eigen === 'boolean' ? eigen : p.defaultActive !== false;
+  };
+  const leute = t.people.filter((p) => (Number(p.factor) || 0) > 0.001);
+
+  const kopf = h('div.btn-row.no-print',
+    { style: { display: 'flex', gap: '10px', alignItems: 'center', padding: '10px 14px', flexWrap: 'wrap' } },
+    h('button.btn.btn--sm', { disabled: seite <= 0, onclick: () => { a.ui.schichtDruckSeite = seite - 1; neu(); } }, '‹ früher'),
+    h('strong', `${fmt.weekLong(wochen[0]?.key)} bis ${fmt.weekLong(wochen[wochen.length - 1]?.key)}`),
+    h('button.btn.btn--sm', { disabled: seite >= seiten - 1, onclick: () => { a.ui.schichtDruckSeite = seite + 1; neu(); } }, 'später ›'),
+    h('span.small.faint', { style: { marginLeft: 'auto' } }, `Seite ${seite + 1} von ${seiten}`));
+
+  const kopfzeile = h('tr',
+    h('th.matrix__rowhead', 'Kürzel'),
+    wochen.map((w) => h('th', { title: `Woche ab ${fmt.date(w.from)}` }, fmt.week(w.key))));
+
+  const zelle = (p, wk) => {
+    if (!aktiv(p, wk)) return h('span.faint', '–');
+    const sn = jeWoche[wk]?.[p.id];
+    if (!sn) return h('span.faint', '–');
+    return h('span', SCHICHT_KURZ[sn - 1] ?? String(sn));
+  };
+
+  const zeilen = leute.map((p) => h('tr',
+    h('td.matrix__rowhead', h('strong.mono', p.label || p.id)),
+    wochen.map((w) => h('td', { style: { textAlign: 'center' } }, zelle(p, w.key)))));
+
+  return h('div',
+    kopf,
+    h('div.aushang__kopf',
+      h('strong', 'Armaturenbau MEGC · Schichtplan'),
+      h('span.small.muted', { style: { marginLeft: 'auto' } },
+        `Stand ${fmt.date(a.analysis.planningDate)} · ${fmt.weekLong(wochen[0]?.key)} bis `
+        + `${fmt.weekLong(wochen[wochen.length - 1]?.key)} · gedruckt ${new Date().toLocaleDateString('de-DE')}`)),
+    leute.length === 0
+      ? h('div.empty', { style: { margin: '0 14px 10px' } }, 'Niemand in der Mannschaft ist eingeplant.')
+      : h('div.scroll-x', h('table.matrix', h('thead', kopfzeile), h('tbody', zeilen))),
+    h('div.small.faint.no-print', { style: { padding: '8px 14px' } },
+      `Zeitraum bis Ende 2027 · ${alle.length} Kalenderwochen. Es wird nur die aktuell angezeigte Seite `
+      + 'gedruckt - ggf. blättern und erneut drucken.'));
 }

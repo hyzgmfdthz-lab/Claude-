@@ -75,6 +75,7 @@ const AREAS = {
       { id: 'urlaub', title: 'Urlaubsplanung einlesen', render: (a) => mannschaft.renderTab(a, 'urlaub') },
       { id: 'einsatz', title: 'Einsatzplan', render: (a) => mannschaft.renderTab(a, 'einsatz') },
       { id: 'aushang', title: 'Aushang', render: (a) => mannschaft.renderTab(a, 'aushang') },
+      { id: 'schichtdruck', title: 'Schichtplan drucken', render: (a) => mannschaft.renderTab(a, 'schichtdruck') },
     ],
   },
   einstellungen: {
