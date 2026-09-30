@@ -1,7 +1,9 @@
 /**
  * Arbeitsfolgen je Projektart / MEGC-Variante (§8/§11).
  */
-import { h, card, table, fmt, toast, validateTag, confirmDialog } from '../ui.js';
+import {
+  h, card, table, fmt, toast, validateTag, confirmDialog, selectField, field,
+} from '../ui.js';
 import { api } from '../api.js';
 
 export function render(a) {
@@ -37,6 +39,8 @@ export function render(a) {
         onclick: () => { a.ui.templateKey = k; a.render(); },
       }, templates[k].label, templates[k].validated === false && h('span', { style: { marginLeft: '5px', opacity: .8 } }, '●')))),
       { sub: '● = Stunden sind noch zu validieren' }),
+
+    neueArbeitsfolgeKarte(a),
 
     card(`${tpl.label}`,
       table([
@@ -181,7 +185,10 @@ export function render(a) {
     card('Alle Arbeitsfolgen zurücksetzen',
       h('div',
         h('div.small.muted', { style: { marginBottom: '8px' } },
-          'Setzt sämtliche Arbeitsfolgen auf die Auslieferungswerte zurück. Projektspezifische Stunden bleiben erhalten.'),
+          'Setzt sämtliche Arbeitsfolgen auf die Auslieferungswerte zurück. Projektspezifische Stunden bleiben '
+          + 'erhalten. Zusätzlich angelegte Arbeitsfolgen (siehe oben) werden dabei ENTFERNT – Aufträge, die '
+          + 'eine solche über „Arbeitsfolge (Übersteuerung)“ ausgewählt hatten, verwenden danach wieder die '
+          + 'automatisch passende Arbeitsfolge ihrer Auftragsart.'),
         h('button.btn.btn--danger', {
           onclick: async () => {
             const ok = await confirmDialog('Arbeitsfolgen zurücksetzen?',
@@ -195,4 +202,62 @@ export function render(a) {
       { sub: 'Vorsicht: nicht umkehrbar' }),
 
     h('div.small.faint', validateTag(), ' Die Stunden je Arbeitsgang sind Startwerte und müssen fachlich bestätigt werden.'));
+}
+
+/*
+ * Neue Arbeitsfolge anlegen (Nutzerauftrag 30.09.2026: "Auftragsart
+ * hinzufuegen bei den Arbeitsfolge bzw. neue Arbeitsfolge hinzufuegen").
+ *
+ * Die Liste der Auftragsarten selbst ist fest im Programm hinterlegt und
+ * jede gueltige Kombination aus Auftragsart/Variante hat bereits eine
+ * Arbeitsfolge - eine neue Auftragsart im engeren Sinn laesst sich darum
+ * nicht anlegen, ohne an mehreren Stellen (Validierung, Regeln, Kennzahlen,
+ * Export) einzugreifen. Was tatsaechlich gebraucht wird und sich sicher
+ * umsetzen laesst: eine ZUSAETZLICHE Arbeitsfolge zu einer bestehenden
+ * Auftragsart, wenn sich einzelne Auftraege dieser Art grundlegend
+ * unterscheiden. Wirksam wird sie erst, wenn ein Auftrag sie unter
+ * "Arbeitsfolge (Uebersteuerung)" auswaehlt (siehe web/js/views/projects.js)
+ * - alle anderen Auftraege dieser Auftragsart bleiben unveraendert bei der
+ * bisherigen, automatisch gewaehlten Arbeitsfolge.
+ */
+function neueArbeitsfolgeKarte(a) {
+  const types = a.state.catalog.projectTypes;
+  const variants = a.state.catalog.variants;
+  const draft = { projectType: types[0]?.id ?? '', variant: null, label: '' };
+
+  const box = h('div');
+  const zeichnen = () => {
+    const type = types.find((t) => t.id === draft.projectType);
+    box.replaceChildren(
+      h('div.grid.grid--form',
+        field('Bezeichnung', draft.label, (v) => { draft.label = v; },
+          { placeholder: 'z. B. Sonderprojekt – Ventilblock' }),
+        selectField('Auftragsart', draft.projectType, types.map((t) => ({ value: t.id, label: t.name })),
+          (v) => { draft.projectType = v; draft.variant = null; zeichnen(); }),
+        type?.hasVariant
+          ? selectField('MEGC-Variante', draft.variant ?? '', variants.map((v) => ({ value: v.id, label: v.name })),
+            (v) => { draft.variant = v || null; })
+          : null),
+      h('div.btn-row', { style: { marginTop: '10px' } },
+        h('button.btn.btn--primary', {
+          onclick: async () => {
+            if (!draft.label.trim()) { toast('Bitte eine Bezeichnung angeben.', 'error'); return; }
+            if (type?.hasVariant && !draft.variant) { toast('Bitte eine MEGC-Variante wählen.', 'error'); return; }
+            const neu = await api.createTemplate({
+              label: draft.label.trim(), projectType: draft.projectType, variant: draft.variant,
+            });
+            a.ui.templateKey = neu.key;
+            await a.reload();
+            toast('Arbeitsfolge angelegt – jetzt Arbeitsgänge ergänzen und einem Auftrag zuweisen.', 'ok');
+          },
+        }, '+ Arbeitsfolge anlegen')));
+  };
+  zeichnen();
+
+  return card('Neue Arbeitsfolge anlegen', box, {
+    sub: 'Für eine Auftragsart, deren Aufträge sich grundlegend unterscheiden (z. B. Sonderprojekt), kann eine '
+      + 'zusätzliche, eigene Arbeitsfolge angelegt werden. Sie beginnt leer – Arbeitsgänge werden wie gewohnt '
+      + 'unten ergänzt. Wirksam wird sie erst, wenn ein einzelner Auftrag sie im Bearbeiten-Dialog unter '
+      + '„Arbeitsfolge (Übersteuerung)“ auswählt.',
+  });
 }

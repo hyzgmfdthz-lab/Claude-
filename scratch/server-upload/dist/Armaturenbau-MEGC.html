@@ -2485,6 +2485,7 @@ const api = {
   duplicateProject: call((id) => core.duplicateProject(id)),
   reorderProjects: call((ids) => core.reorderProjects(ids)),
 
+  createTemplate: call((input) => core.createTemplate(input)),
   updateTemplate: call((key, tpl) => core.updateTemplate(key, tpl)),
   resetTemplates: call(() => core.resetTemplates()),
   updateWorkplaces: call((workplaces) => core.updateWorkplaces(workplaces)),
@@ -5769,6 +5770,16 @@ function prioZelle(a, p) {
 }
 const VARIANT_OPTIONS = (a) => [{ value: '', label: '– keine –' }, ...a.state.catalog.variants.map((v) => ({ value: v.id, label: v.name }))];
 
+/**
+ * Zusaetzlich angelegte Arbeitsfolgen zur Auswahl (siehe routing.js,
+ * "Neue Arbeitsfolge anlegen"). Ohne Auswahl gilt weiter die automatische
+ * Zuordnung nach Auftragsart/Variante (routingKey in engine/model.js).
+ */
+const TEMPLATE_OVERRIDE_OPTIONS = (a) => [
+  { value: '', label: '– automatisch nach Auftragsart/Variante –' },
+  ...Object.values(a.state.templates).map((t) => ({ value: t.key, label: `${t.label} (${t.key})` })),
+];
+
 function render(a) {
   const an = a.analysis;
   const f = a.ui.projectFilter;
@@ -5994,7 +6005,7 @@ function editProject(a, id) {
   const draft = existing
     ? JSON.parse(JSON.stringify(existing))
     : {
-      orderNo: '', customer: '', name: '', projectType: 'NEUBAU', variant: 'FT40',
+      orderNo: '', customer: '', name: '', projectType: 'NEUBAU', variant: 'FT40', templateOverride: null,
       dueDate: null, handoverDate: null, priority: 'P3', sequenceLocked: false,
       progressMode: 'NONE', progressPercent: 0, operations: [], totalHoursOverride: null,
       materialAvailableFrom: null, earliestStart: null, done: false, note: '',
@@ -6070,6 +6081,9 @@ function editProject(a, id) {
         field('Auftragsbezeichnung', draft.name, (v) => { draft.name = v; }),
         selectField('Projektart', draft.projectType, TYPE_OPTIONS(a), (v) => { draft.projectType = v; }),
         selectField('MEGC-Variante', draft.variant ?? '', VARIANT_OPTIONS(a), (v) => { draft.variant = v || null; }),
+        selectField('Arbeitsfolge (Übersteuerung)', draft.templateOverride ?? '', TEMPLATE_OVERRIDE_OPTIONS(a),
+          (v) => { draft.templateOverride = v || null; },
+          { hint: 'Nur nötig, wenn für diese Auftragsart mehrere Arbeitsfolgen angelegt wurden.' }),
         selectField('Priorität', draft.priority, ['P1', 'P2', 'P3', 'P4'].map((p) => ({ value: p, label: p })), (v) => { draft.priority = v; }),
         field('Fertigstellung (Deadline Armaturenbau)', draft.dueDate ?? '', (v) => { draft.dueDate = v || null; }, { type: 'date' }),
         field('„Fertig“ Gesamtanlage (nur Information)', draft.handoverDate ?? '', (v) => { draft.handoverDate = v || null; }, { type: 'date', hint: 'Wird für die Terminbewertung des Armaturenbaus NICHT verwendet.' }),
@@ -6209,7 +6223,7 @@ __defs["web/js/views/routing.js"] = function (__exports, __req) {
 /**
  * Arbeitsfolgen je Projektart / MEGC-Variante (§8/§11).
  */
-const { h, card, table, fmt, toast, validateTag, confirmDialog } = __req("web/js/ui.js");
+const { h, card, table, fmt, toast, validateTag, confirmDialog, selectField, field } = __req("web/js/ui.js");
 const { api } = __req("browser/app.js");
 
 function render(a) {
@@ -6245,6 +6259,8 @@ function render(a) {
         onclick: () => { a.ui.templateKey = k; a.render(); },
       }, templates[k].label, templates[k].validated === false && h('span', { style: { marginLeft: '5px', opacity: .8 } }, '●')))),
       { sub: '● = Stunden sind noch zu validieren' }),
+
+    neueArbeitsfolgeKarte(a),
 
     card(`${tpl.label}`,
       table([
@@ -6389,7 +6405,10 @@ function render(a) {
     card('Alle Arbeitsfolgen zurücksetzen',
       h('div',
         h('div.small.muted', { style: { marginBottom: '8px' } },
-          'Setzt sämtliche Arbeitsfolgen auf die Auslieferungswerte zurück. Projektspezifische Stunden bleiben erhalten.'),
+          'Setzt sämtliche Arbeitsfolgen auf die Auslieferungswerte zurück. Projektspezifische Stunden bleiben '
+          + 'erhalten. Zusätzlich angelegte Arbeitsfolgen (siehe oben) werden dabei ENTFERNT – Aufträge, die '
+          + 'eine solche über „Arbeitsfolge (Übersteuerung)“ ausgewählt hatten, verwenden danach wieder die '
+          + 'automatisch passende Arbeitsfolge ihrer Auftragsart.'),
         h('button.btn.btn--danger', {
           onclick: async () => {
             const ok = await confirmDialog('Arbeitsfolgen zurücksetzen?',
@@ -6403,6 +6422,64 @@ function render(a) {
       { sub: 'Vorsicht: nicht umkehrbar' }),
 
     h('div.small.faint', validateTag(), ' Die Stunden je Arbeitsgang sind Startwerte und müssen fachlich bestätigt werden.'));
+}
+
+/*
+ * Neue Arbeitsfolge anlegen (Nutzerauftrag 30.09.2026: "Auftragsart
+ * hinzufuegen bei den Arbeitsfolge bzw. neue Arbeitsfolge hinzufuegen").
+ *
+ * Die Liste der Auftragsarten selbst ist fest im Programm hinterlegt und
+ * jede gueltige Kombination aus Auftragsart/Variante hat bereits eine
+ * Arbeitsfolge - eine neue Auftragsart im engeren Sinn laesst sich darum
+ * nicht anlegen, ohne an mehreren Stellen (Validierung, Regeln, Kennzahlen,
+ * Export) einzugreifen. Was tatsaechlich gebraucht wird und sich sicher
+ * umsetzen laesst: eine ZUSAETZLICHE Arbeitsfolge zu einer bestehenden
+ * Auftragsart, wenn sich einzelne Auftraege dieser Art grundlegend
+ * unterscheiden. Wirksam wird sie erst, wenn ein Auftrag sie unter
+ * "Arbeitsfolge (Uebersteuerung)" auswaehlt (siehe web/js/views/projects.js)
+ * - alle anderen Auftraege dieser Auftragsart bleiben unveraendert bei der
+ * bisherigen, automatisch gewaehlten Arbeitsfolge.
+ */
+function neueArbeitsfolgeKarte(a) {
+  const types = a.state.catalog.projectTypes;
+  const variants = a.state.catalog.variants;
+  const draft = { projectType: types[0]?.id ?? '', variant: null, label: '' };
+
+  const box = h('div');
+  const zeichnen = () => {
+    const type = types.find((t) => t.id === draft.projectType);
+    box.replaceChildren(
+      h('div.grid.grid--form',
+        field('Bezeichnung', draft.label, (v) => { draft.label = v; },
+          { placeholder: 'z. B. Sonderprojekt – Ventilblock' }),
+        selectField('Auftragsart', draft.projectType, types.map((t) => ({ value: t.id, label: t.name })),
+          (v) => { draft.projectType = v; draft.variant = null; zeichnen(); }),
+        type?.hasVariant
+          ? selectField('MEGC-Variante', draft.variant ?? '', variants.map((v) => ({ value: v.id, label: v.name })),
+            (v) => { draft.variant = v || null; })
+          : null),
+      h('div.btn-row', { style: { marginTop: '10px' } },
+        h('button.btn.btn--primary', {
+          onclick: async () => {
+            if (!draft.label.trim()) { toast('Bitte eine Bezeichnung angeben.', 'error'); return; }
+            if (type?.hasVariant && !draft.variant) { toast('Bitte eine MEGC-Variante wählen.', 'error'); return; }
+            const neu = await api.createTemplate({
+              label: draft.label.trim(), projectType: draft.projectType, variant: draft.variant,
+            });
+            a.ui.templateKey = neu.key;
+            await a.reload();
+            toast('Arbeitsfolge angelegt – jetzt Arbeitsgänge ergänzen und einem Auftrag zuweisen.', 'ok');
+          },
+        }, '+ Arbeitsfolge anlegen')));
+  };
+  zeichnen();
+
+  return card('Neue Arbeitsfolge anlegen', box, {
+    sub: 'Für eine Auftragsart, deren Aufträge sich grundlegend unterscheiden (z. B. Sonderprojekt), kann eine '
+      + 'zusätzliche, eigene Arbeitsfolge angelegt werden. Sie beginnt leer – Arbeitsgänge werden wie gewohnt '
+      + 'unten ergänzt. Wirksam wird sie erst, wenn ein einzelner Auftrag sie im Bearbeiten-Dialog unter '
+      + '„Arbeitsfolge (Übersteuerung)“ auswählt.',
+  });
 }
 
   __exports["render"] = render;
@@ -11909,6 +11986,43 @@ function createApi(store, options = {}) {
       return dataset.templates[key];
     },
 
+    /**
+     * Legt eine ZUSAETZLICHE Arbeitsfolge zu einer bestehenden Auftragsart
+     * an (Nutzerauftrag 30.09.2026).
+     *
+     * Fuer jede gueltige Kombination aus Auftragsart und Variante besteht
+     * bereits eine Arbeitsfolge (routingKey() waehlt sie eindeutig) - eine
+     * "neue Auftragsart" im engeren Sinn gibt es im Datenmodell nicht, die
+     * Liste der Auftragsarten ist fest. Was fehlte: eine ZWEITE, eigene
+     * Arbeitsfolge fuer dieselbe Auftragsart, wenn sich einzelne Auftraege
+     * dieser Art grundlegend unterscheiden (z. B. bei Sonderprojekt oder
+     * Reparatur). Die neue Vorlage bekommt einen eigenen, freien Schluessel
+     * und wird erst wirksam, wenn ein Auftrag sie unter "Arbeitsfolge
+     * (Uebersteuerung)" auswaehlt (project.templateOverride, siehe
+     * templateFor() in routing.js) - am Verhalten bestehender Auftraege
+     * aendert sich dadurch nichts.
+     *
+     * @param {{label:string, projectType:string, variant?:string|null}} input
+     */
+    createTemplate({ label, projectType, variant = null }) {
+      if (!label || !String(label).trim()) throw new ApiError('Bezeichnung fehlt.');
+      const type = PROJECT_TYPES.find((t) => t.id === projectType);
+      if (!type) throw new ApiError(`Unbekannte Auftragsart "${projectType}".`);
+      if (type.hasVariant && !VARIANTS.some((v) => v.id === variant)) {
+        throw new ApiError(`Unbekannte Variante "${variant}" für ${type.name}.`);
+      }
+      const basis = type.hasVariant ? `${projectType}_${variant}` : projectType;
+      let key = `${basis}_2`;
+      for (let n = 2; dataset.templates[key]; n += 1) key = `${basis}_${n}`;
+      dataset.templates[key] = {
+        key, label: String(label).trim(), validated: false,
+        note: 'Neu angelegt – Arbeitsgänge und Stunden sind zu befüllen.',
+        steps: [],
+      };
+      persist(`Neue Arbeitsfolge angelegt: ${label} (${key})`);
+      return dataset.templates[key];
+    },
+
     resetTemplates() {
       dataset.templates = defaultRoutingTemplates();
       persist('Arbeitsfolgen zurückgesetzt');
@@ -12933,7 +13047,7 @@ function describeProjectPatch(patch, vorher = {}) {
     orderNo: 'Auftragsnummer', customer: 'Kunde', name: 'Bezeichnung',
     projectType: 'Auftragsart', variant: 'Variante', priority: 'Priorität',
     dueDate: 'Fertigstellung', handoverDate: 'Fertig (Gesamtanlage)',
-    totalHoursOverride: 'Gesamtstunden', sequence: 'Position',
+    totalHoursOverride: 'Gesamtstunden', sequence: 'Position', templateOverride: 'Arbeitsfolge (Übersteuerung)',
     earliestStart: 'frühester Start', materialAvailableFrom: 'Material verfügbar ab',
     note: 'Bemerkung', done: 'komplett fertig',
   };
@@ -15509,6 +15623,7 @@ const DEP_TYPE = {
  * @property {string} name
  * @property {string} projectType
  * @property {string|null} variant
+ * @property {string|null} [templateOverride] Arbeitsfolge-Schluessel, geht routingKey() vor
  * @property {string|null} dueDate  FERTIGSTELLUNG = Deadline Armaturenbau
  * @property {string|null} handoverDate "Fertig" der Gesamtanlage (nur Information!)
  * @property {string} priority      P1..P4
@@ -15549,6 +15664,17 @@ function createProject(p = {}) {
     name: p.name ?? '',
     projectType: p.projectType ?? 'NEUBAU',
     variant: p.variant ?? null,
+    /**
+     * Arbeitsfolge-Uebersteuerung (Nutzerauftrag 30.09.2026: "Auftragsart
+     * hinzufuegen bei den Arbeitsfolge bzw. neue Arbeitsfolge hinzufuegen").
+     * Normalerweise waehlt routingKey(projectType, variant) die Arbeitsfolge
+     * eindeutig - fuer jede gueltige Kombination existiert bereits eine.
+     * Wird hier der SCHLUESSEL einer zusaetzlich angelegten Arbeitsfolge
+     * eingetragen, geht dieser der automatischen Auswahl vor (siehe
+     * templateFor() in routing.js) - ohne Eintrag (null) aendert sich am
+     * bisherigen Verhalten nichts.
+     */
+    templateOverride: p.templateOverride ?? null,
     dueDate: p.dueDate ?? null,
     handoverDate: p.handoverDate ?? null,
     priority: p.priority ?? 'P3',
@@ -17706,6 +17832,9 @@ const { OPERATION_BY_ID, OP_STATUS, DEP_TYPE, routingKey, round2 } = __req("engi
  * @param {any} project @param {Record<string,any>} templates
  */
 function templateFor(project, templates) {
+  if (project.templateOverride && templates[project.templateOverride]) {
+    return templates[project.templateOverride];
+  }
   const key = routingKey(project.projectType, project.variant);
   if (templates[key]) return templates[key];
   if (templates[project.projectType]) return templates[project.projectType];

@@ -220,6 +220,7 @@ export const DEP_TYPE = {
  * @property {string} name
  * @property {string} projectType
  * @property {string|null} variant
+ * @property {string|null} [templateOverride] Arbeitsfolge-Schluessel, geht routingKey() vor
  * @property {string|null} dueDate  FERTIGSTELLUNG = Deadline Armaturenbau
  * @property {string|null} handoverDate "Fertig" der Gesamtanlage (nur Information!)
  * @property {string} priority      P1..P4
@@ -260,6 +261,17 @@ export function createProject(p = {}) {
     name: p.name ?? '',
     projectType: p.projectType ?? 'NEUBAU',
     variant: p.variant ?? null,
+    /**
+     * Arbeitsfolge-Uebersteuerung (Nutzerauftrag 30.09.2026: "Auftragsart
+     * hinzufuegen bei den Arbeitsfolge bzw. neue Arbeitsfolge hinzufuegen").
+     * Normalerweise waehlt routingKey(projectType, variant) die Arbeitsfolge
+     * eindeutig - fuer jede gueltige Kombination existiert bereits eine.
+     * Wird hier der SCHLUESSEL einer zusaetzlich angelegten Arbeitsfolge
+     * eingetragen, geht dieser der automatischen Auswahl vor (siehe
+     * templateFor() in routing.js) - ohne Eintrag (null) aendert sich am
+     * bisherigen Verhalten nichts.
+     */
+    templateOverride: p.templateOverride ?? null,
     dueDate: p.dueDate ?? null,
     handoverDate: p.handoverDate ?? null,
     priority: p.priority ?? 'P3',

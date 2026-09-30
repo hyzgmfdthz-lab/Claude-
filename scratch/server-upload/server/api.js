@@ -1380,6 +1380,43 @@ export function createApi(store, options = {}) {
       return dataset.templates[key];
     },
 
+    /**
+     * Legt eine ZUSAETZLICHE Arbeitsfolge zu einer bestehenden Auftragsart
+     * an (Nutzerauftrag 30.09.2026).
+     *
+     * Fuer jede gueltige Kombination aus Auftragsart und Variante besteht
+     * bereits eine Arbeitsfolge (routingKey() waehlt sie eindeutig) - eine
+     * "neue Auftragsart" im engeren Sinn gibt es im Datenmodell nicht, die
+     * Liste der Auftragsarten ist fest. Was fehlte: eine ZWEITE, eigene
+     * Arbeitsfolge fuer dieselbe Auftragsart, wenn sich einzelne Auftraege
+     * dieser Art grundlegend unterscheiden (z. B. bei Sonderprojekt oder
+     * Reparatur). Die neue Vorlage bekommt einen eigenen, freien Schluessel
+     * und wird erst wirksam, wenn ein Auftrag sie unter "Arbeitsfolge
+     * (Uebersteuerung)" auswaehlt (project.templateOverride, siehe
+     * templateFor() in routing.js) - am Verhalten bestehender Auftraege
+     * aendert sich dadurch nichts.
+     *
+     * @param {{label:string, projectType:string, variant?:string|null}} input
+     */
+    createTemplate({ label, projectType, variant = null }) {
+      if (!label || !String(label).trim()) throw new ApiError('Bezeichnung fehlt.');
+      const type = PROJECT_TYPES.find((t) => t.id === projectType);
+      if (!type) throw new ApiError(`Unbekannte Auftragsart "${projectType}".`);
+      if (type.hasVariant && !VARIANTS.some((v) => v.id === variant)) {
+        throw new ApiError(`Unbekannte Variante "${variant}" für ${type.name}.`);
+      }
+      const basis = type.hasVariant ? `${projectType}_${variant}` : projectType;
+      let key = `${basis}_2`;
+      for (let n = 2; dataset.templates[key]; n += 1) key = `${basis}_${n}`;
+      dataset.templates[key] = {
+        key, label: String(label).trim(), validated: false,
+        note: 'Neu angelegt – Arbeitsgänge und Stunden sind zu befüllen.',
+        steps: [],
+      };
+      persist(`Neue Arbeitsfolge angelegt: ${label} (${key})`);
+      return dataset.templates[key];
+    },
+
     resetTemplates() {
       dataset.templates = defaultRoutingTemplates();
       persist('Arbeitsfolgen zurückgesetzt');
@@ -2404,7 +2441,7 @@ export function describeProjectPatch(patch, vorher = {}) {
     orderNo: 'Auftragsnummer', customer: 'Kunde', name: 'Bezeichnung',
     projectType: 'Auftragsart', variant: 'Variante', priority: 'Priorität',
     dueDate: 'Fertigstellung', handoverDate: 'Fertig (Gesamtanlage)',
-    totalHoursOverride: 'Gesamtstunden', sequence: 'Position',
+    totalHoursOverride: 'Gesamtstunden', sequence: 'Position', templateOverride: 'Arbeitsfolge (Übersteuerung)',
     earliestStart: 'frühester Start', materialAvailableFrom: 'Material verfügbar ab',
     note: 'Bemerkung', done: 'komplett fertig',
   };

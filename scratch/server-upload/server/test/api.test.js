@@ -234,6 +234,50 @@ test('Arbeitsfolge ändern rechnet betroffene Projekte neu', () => {
   assert.equal(Math.round(after[0].totalManHours - before[0].totalManHours), 30);
 });
 
+test('Neue Arbeitsfolge: zusätzliche Vorlage zu bestehender Auftragsart anlegen', () => {
+  /*
+   * Nutzerauftrag 30.09.2026 ("Auftragsart hinzufuegen bei den
+   * Arbeitsfolge bzw. neue Arbeitsfolge hinzufuegen"): die Liste der
+   * Auftragsarten selbst ist fest, aber zu einer bestehenden Auftragsart
+   * kann eine ZUSAETZLICHE Arbeitsfolge angelegt werden - wirksam erst,
+   * wenn ein Auftrag sie ausdruecklich auswaehlt (templateOverride).
+   */
+  const api = freshApi();
+
+  assert.throws(() => api.createTemplate({ label: '', projectType: 'UMBAU' }), /Bezeichnung/);
+  assert.throws(() => api.createTemplate({ label: 'X', projectType: 'NICHT_VORHANDEN' }), /Auftragsart/);
+  assert.throws(() => api.createTemplate({ label: 'X', projectType: 'NEUBAU', variant: null }), /Variante/,
+    'Neubau verlangt eine Variante');
+
+  const neu = api.createTemplate({ label: 'Umbau (Sonderfall)', projectType: 'UMBAU' });
+  assert.equal(neu.key, 'UMBAU_2');
+  assert.equal(neu.label, 'Umbau (Sonderfall)');
+  assert.deepEqual(neu.steps, []);
+  assert.equal(api.state().templates.UMBAU_2.key, 'UMBAU_2', 'landet im Datenbestand');
+  assert.ok(api.state().templates.UMBAU, 'die bisherige Arbeitsfolge bleibt unverändert bestehen');
+
+  // Zweiter Zusatz zur selben Auftragsart bekommt den nächsten freien Schlüssel
+  const zweiter = api.createTemplate({ label: 'Umbau (noch ein Sonderfall)', projectType: 'UMBAU' });
+  assert.equal(zweiter.key, 'UMBAU_3');
+
+  // Erst über die projektspezifische Übersteuerung wird die neue Arbeitsfolge wirksam
+  const projekte = api.state().projects.filter((p) => p.projectType === 'UMBAU');
+  assert.ok(projekte.length > 0, 'Testdatenbestand muss ein Umbau-Projekt enthalten');
+  const projekt = projekte[0];
+  const vorher = api.analysis('BASELINE').projects.find((p) => p.id === projekt.id);
+  assert.equal(vorher.templateKey, 'UMBAU', 'ohne Übersteuerung greift weiter die automatische Auswahl');
+
+  api.updateProject(projekt.id, { templateOverride: 'UMBAU_2' });
+  const nachher = api.analysis('BASELINE').projects.find((p) => p.id === projekt.id);
+  assert.equal(nachher.templateKey, 'UMBAU_2', 'mit Übersteuerung verwendet genau dieser Auftrag die neue Arbeitsfolge');
+
+  const andere = api.state().projects.filter((p) => p.projectType === 'UMBAU' && p.id !== projekt.id);
+  for (const p of andere) {
+    const a = api.analysis('BASELINE').projects.find((x) => x.id === p.id);
+    assert.equal(a.templateKey, 'UMBAU', 'andere Umbau-Aufträge bleiben von der Übersteuerung unberührt');
+  }
+});
+
 /* ---------------- Excel / CSV ---------------- */
 
 test('ZIP: schreiben und wieder lesen', () => {

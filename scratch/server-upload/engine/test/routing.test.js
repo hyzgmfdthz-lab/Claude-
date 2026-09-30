@@ -14,6 +14,27 @@ test('Arbeitsplan: Auswahl je Projektart und Variante (§5/§6/§8)', () => {
   assert.equal(templateFor(createProject({ projectType: 'UMBAU' }), T).key, 'UMBAU');
 });
 
+test('Arbeitsplan: templateOverride geht der automatischen Auswahl vor, mit Rückfall bei fehlendem Schlüssel', () => {
+  /*
+   * Nutzerauftrag 30.09.2026 ("Auftragsart hinzufuegen bei den
+   * Arbeitsfolge bzw. neue Arbeitsfolge hinzufuegen"): eine zusaetzliche
+   * Arbeitsfolge zu einer bestehenden Auftragsart wird erst wirksam, wenn
+   * ein Auftrag sie ausdruecklich auswaehlt.
+   */
+  const mitZusatz = { ...T, NEUBAU_FT40_2: { ...T.NEUBAU_FT40, key: 'NEUBAU_FT40_2', label: 'Neubau 40 ft (Sonderfall)' } };
+  const ohneUebersteuerung = createProject({ projectType: 'NEUBAU', variant: 'FT40' });
+  assert.equal(templateFor(ohneUebersteuerung, mitZusatz).key, 'NEUBAU_FT40',
+    'ohne Uebersteuerung bleibt die automatische Auswahl unveraendert');
+
+  const mitUebersteuerung = createProject({ projectType: 'NEUBAU', variant: 'FT40', templateOverride: 'NEUBAU_FT40_2' });
+  assert.equal(templateFor(mitUebersteuerung, mitZusatz).key, 'NEUBAU_FT40_2',
+    'mit Uebersteuerung wird die zusaetzliche Arbeitsfolge verwendet');
+
+  const zeigtInsLeere = createProject({ projectType: 'NEUBAU', variant: 'FT40', templateOverride: 'GIBT_ES_NICHT' });
+  assert.equal(templateFor(zeigtInsLeere, mitZusatz).key, 'NEUBAU_FT40',
+    'ein Verweis auf eine geloeschte Arbeitsfolge faellt sauber auf die automatische Auswahl zurueck');
+});
+
 test('Arbeitsplan: eigene Vorlage je MEGC-Variante, Stunden getrennt änderbar (§6/§8)', () => {
   const h = (v) => resolveRouting(createProject({ projectType: 'NEUBAU', variant: v }), T, C).totalManHours;
   // Aus der bisherigen Planung liegt nur eine Standard-Neubaufolge vor

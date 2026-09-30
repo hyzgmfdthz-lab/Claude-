@@ -159,6 +159,7 @@ export const api = {
   duplicateProject: (id) => request('POST', `/api/projects/${encodeURIComponent(id)}/duplicate`, {}),
   reorderProjects: (ids) => request('POST', '/api/projects/reorder', { ids }),
 
+  createTemplate: (input) => request('POST', '/api/templates', input),
   updateTemplate: (key, tpl) => request('PUT', `/api/templates/${encodeURIComponent(key)}`, tpl),
   resetTemplates: () => request('POST', '/api/templates/reset', {}),
   updateWorkplaces: (workplaces) => request('PUT', '/api/workplaces', { workplaces }),

@@ -160,6 +160,7 @@ export const api = {
   duplicateProject: call((id) => core.duplicateProject(id)),
   reorderProjects: call((ids) => core.reorderProjects(ids)),
 
+  createTemplate: call((input) => core.createTemplate(input)),
   updateTemplate: call((key, tpl) => core.updateTemplate(key, tpl)),
   resetTemplates: call(() => core.resetTemplates()),
   updateWorkplaces: call((workplaces) => core.updateWorkplaces(workplaces)),

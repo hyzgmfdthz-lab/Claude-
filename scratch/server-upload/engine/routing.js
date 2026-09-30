@@ -28,6 +28,9 @@ import { OPERATION_BY_ID, OP_STATUS, DEP_TYPE, routingKey, round2 } from './mode
  * @param {any} project @param {Record<string,any>} templates
  */
 export function templateFor(project, templates) {
+  if (project.templateOverride && templates[project.templateOverride]) {
+    return templates[project.templateOverride];
+  }
   const key = routingKey(project.projectType, project.variant);
   if (templates[key]) return templates[key];
   if (templates[project.projectType]) return templates[project.projectType];

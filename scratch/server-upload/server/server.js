@@ -222,6 +222,7 @@ async function handleApi(api, req, res, pathname, query, runtime = null) {
     case 'DELETE /projects/:id': return sendJson(res, 200, api.deleteProject(b));
     case 'POST /projects/:id/duplicate': return sendJson(res, 201, api.duplicateProject(b));
 
+    case 'POST /templates': return sendJson(res, 201, api.createTemplate(body));
     case 'PUT /templates/:id': return sendJson(res, 200, api.updateTemplate(b, body));
     case 'POST /templates/reset': return sendJson(res, 200, api.resetTemplates());
     case 'PUT /workplaces': return sendJson(res, 200, api.updateWorkplaces(body.workplaces));

@@ -45,6 +45,16 @@ function prioZelle(a, p) {
 }
 const VARIANT_OPTIONS = (a) => [{ value: '', label: '– keine –' }, ...a.state.catalog.variants.map((v) => ({ value: v.id, label: v.name }))];
 
+/**
+ * Zusaetzlich angelegte Arbeitsfolgen zur Auswahl (siehe routing.js,
+ * "Neue Arbeitsfolge anlegen"). Ohne Auswahl gilt weiter die automatische
+ * Zuordnung nach Auftragsart/Variante (routingKey in engine/model.js).
+ */
+const TEMPLATE_OVERRIDE_OPTIONS = (a) => [
+  { value: '', label: '– automatisch nach Auftragsart/Variante –' },
+  ...Object.values(a.state.templates).map((t) => ({ value: t.key, label: `${t.label} (${t.key})` })),
+];
+
 export function render(a) {
   const an = a.analysis;
   const f = a.ui.projectFilter;
@@ -270,7 +280,7 @@ export function editProject(a, id) {
   const draft = existing
     ? JSON.parse(JSON.stringify(existing))
     : {
-      orderNo: '', customer: '', name: '', projectType: 'NEUBAU', variant: 'FT40',
+      orderNo: '', customer: '', name: '', projectType: 'NEUBAU', variant: 'FT40', templateOverride: null,
       dueDate: null, handoverDate: null, priority: 'P3', sequenceLocked: false,
       progressMode: 'NONE', progressPercent: 0, operations: [], totalHoursOverride: null,
       materialAvailableFrom: null, earliestStart: null, done: false, note: '',
@@ -346,6 +356,9 @@ export function editProject(a, id) {
         field('Auftragsbezeichnung', draft.name, (v) => { draft.name = v; }),
         selectField('Projektart', draft.projectType, TYPE_OPTIONS(a), (v) => { draft.projectType = v; }),
         selectField('MEGC-Variante', draft.variant ?? '', VARIANT_OPTIONS(a), (v) => { draft.variant = v || null; }),
+        selectField('Arbeitsfolge (Übersteuerung)', draft.templateOverride ?? '', TEMPLATE_OVERRIDE_OPTIONS(a),
+          (v) => { draft.templateOverride = v || null; },
+          { hint: 'Nur nötig, wenn für diese Auftragsart mehrere Arbeitsfolgen angelegt wurden.' }),
         selectField('Priorität', draft.priority, ['P1', 'P2', 'P3', 'P4'].map((p) => ({ value: p, label: p })), (v) => { draft.priority = v; }),
         field('Fertigstellung (Deadline Armaturenbau)', draft.dueDate ?? '', (v) => { draft.dueDate = v || null; }, { type: 'date' }),
         field('„Fertig“ Gesamtanlage (nur Information)', draft.handoverDate ?? '', (v) => { draft.handoverDate = v || null; }, { type: 'date', hint: 'Wird für die Terminbewertung des Armaturenbaus NICHT verwendet.' }),
